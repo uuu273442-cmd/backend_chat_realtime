@@ -157,6 +157,7 @@ export class MessageService {
      * để frontend hiển thị message trong chat list ngay lập tức.
      */
     public async createCallMessage(dto: CreateCallMessageDto): Promise<MessageDocument> {
+        console.log('[createCallMessage] called with:', JSON.stringify(dto));
         const {
             conversationId,
             callerId,
@@ -381,9 +382,11 @@ export class MessageService {
         });
         await message.populate(this.getArrayPopulate());
 
-        const attachments = await this.attachmentService.uploadVoice(
+        const voiceAttachment = await this.attachmentService.uploadVoice(
             file, message.id, userId, conversationId
         );
+        const attachments = [voiceAttachment];
+
         this.chatGateway.emitNewMessageVoice(conversationId, {message, attachments});
         await this.conversationService.updateConversation(conversationId, message.id);
 
