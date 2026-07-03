@@ -214,19 +214,24 @@ export class UserService {
     }
 
     public async getProfileWithPrivacy(targetUserId: string, viewerUserId: string) {
+        const isSelf = targetUserId === viewerUserId;
         const user = await this.userModel.findById(
             convertStringToObjectId(targetUserId),
-            {password: 0, phoneNumber: 0, refreshToken: 0}
+            {password: 0, refreshToken: 0}
         ).lean();
         if (!user) throw new NotFoundException("User not found");
+
+        // Chỉ ẩn phoneNumber khi xem profile NGƯỜI KHÁC — xem chính mình
+        // (vd: mở Settings) vẫn cần thấy số điện thoại để có thể sửa
+        if (!isSelf) delete (user as any).phoneNumber;
 
         const visibility = user.privacy.lastSeenVisibility;
         let showLastSeen = false;
 
         if (visibility === "everyone") showLastSeen = true;
-        else if (visibility === "friends" && targetUserId !== viewerUserId)
+        else if (visibility === "friends" && !isSelf)
             showLastSeen = await this.friendService.isFriend(viewerUserId, targetUserId);
-        else if (visibility === "friends" && targetUserId === viewerUserId)
+        else if (visibility === "friends" && isSelf)
             showLastSeen = true;
 
         if (!showLastSeen) user.lastSeen = null as any;
@@ -255,10 +260,14 @@ export class UserService {
     public async updateProfile(userId: string, dto: updateProfileDto, file?: Express.Multer.File) {
         const upload: any = {};
         if (file)
+            // uploadAvatarProfile giờ trả về URL string trực tiếp (đã fix bug
+            // cũ trả về cả Attachment document + sai type: "voice")
             upload.avatar = await this.attachmentService.uploadAvatarProfile(file, userId);
         if (dto.email) upload.email = dto.email;
         if (dto.name) upload.name = dto.name;
-        if (dto.phone) upload.phone = dto.name;
+        // Fix bug cũ: gán nhầm dto.name + sai tên field (schema là phoneNumber,
+        // không phải phone) khiến số điện thoại không bao giờ được cập nhật
+        if (dto.phone) upload.phoneNumber = dto.phone;
 
         const updated = await this.userModel.findByIdAndUpdate(
             convertStringToObjectId(userId),

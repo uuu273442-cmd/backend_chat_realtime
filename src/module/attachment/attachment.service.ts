@@ -76,22 +76,12 @@ export class AttachmentService {
         file: Express.Multer.File,
         uploaderId: string,
     ) {
-        const uploaderObjectId = convertStringToObjectId(uploaderId);
+        // Avatar không gắn với message/conversation nào — chỉ cần upload lên
+        // cloud và trả về URL string, không tạo Attachment document (tránh
+        // record rác với messageId/conversationId null, và tránh bug cũ
+        // set type: "voice" sai + trả về cả document thay vì URL string)
         const upload = await this.cloudService.uploadSingle(file, "image");
-        return this.attachmentModel.create({
-            messageId: null,
-            conversationId: null,
-            uploaderId: uploaderObjectId,
-            type: "voice",
-            url: upload.url,
-            publicId: upload.publicId,
-            thumbnail: upload.thumbnail,
-            filename: file.filename,
-            originalName: file.originalname,
-            size: upload.size,
-            mimeType: upload.mimeType,
-            duration: upload.duration,
-        });
+        return upload.url;
     }
 
     public async getAttachments(ids: Types.ObjectId[]) {
