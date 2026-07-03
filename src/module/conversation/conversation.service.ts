@@ -576,7 +576,7 @@ export class ConversationService {
 
     private arrayPopulate() {
         return [
-            {path: "participants.userId", select: "name avatar status"},
+            {path: "participants.userId", select: "name avatar status customStatusMessage lastSeen"},
             {
                 path: "lastMessage",
                 select: "senderId content createdAt",
