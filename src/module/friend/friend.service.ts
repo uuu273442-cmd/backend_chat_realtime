@@ -21,6 +21,7 @@ export class FriendService {
         private readonly friendRequestModel: Model<FriendRequestDocument>,
         @Inject(forwardRef(() => ConversationService))
         private readonly conversationService: ConversationService,
+        @Inject(forwardRef(() => ChatGateway))
         private readonly chatGateway: ChatGateway,
         @Inject(forwardRef(() => UserService))
         private readonly userService: UserService,

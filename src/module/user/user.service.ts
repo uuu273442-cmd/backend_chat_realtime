@@ -268,6 +268,7 @@ export class UserService {
         // Fix bug cũ: gán nhầm dto.name + sai tên field (schema là phoneNumber,
         // không phải phone) khiến số điện thoại không bao giờ được cập nhật
         if (dto.phone) upload.phoneNumber = dto.phone;
+        if (dto.bio !== undefined) upload.bio = dto.bio;
 
         const updated = await this.userModel.findByIdAndUpdate(
             convertStringToObjectId(userId),

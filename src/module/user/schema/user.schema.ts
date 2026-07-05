@@ -27,6 +27,9 @@ export class User {
     @Prop({default: null})
     avatar?: string;
 
+    @Prop({ type: String, default: null, maxlength: 150 })
+    bio?: string | null;
+
     @Prop({
         type: String,
         enum: ["online", "away", "busy", "offline"],

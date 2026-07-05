@@ -210,6 +210,13 @@ export class ChatGateway
         if (!isCalleeExistInCall) return;
         // need to add method event error
 
+        // Chặn gọi điện nếu 1 trong 2 người đã block người còn lại
+        const blocked = await this.userService.isBlocked(callerId, data.calleId);
+        if (blocked) {
+            this.callEmit.callBusy(callerId, {callId: ""});
+            return;
+        }
+
         // [REDIS] Kiểm tra busy từ Redis thay Map
         const calleeInCall = await this.redisCallService.isUserInCall(data.calleId);
         if (calleeInCall) {

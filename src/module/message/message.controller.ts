@@ -41,13 +41,14 @@ import {PaginationDto} from "./dto/pagination.dto";
 import {createMulterOptions} from "../../shared/upload/upload.config";
 
 @Controller("messages")
-@UseGuards(JwtAuthGuard, BlockGuard, ConversationParticipantGuard)
+@UseGuards(JwtAuthGuard, ConversationParticipantGuard)
 export class MessageController {
     constructor(
         private readonly messageService: MessageService
     ) {
     }
 
+    @UseGuards(BlockGuard)
     @Post(":id")
     public async message(
         @Param("id") room: ConversationIdDto["id"],
@@ -83,6 +84,7 @@ export class MessageController {
         return this.messageService.unpin(dto.id, user.userId, room);
     }
 
+    @UseGuards(BlockGuard)
     @Post(":id/file")
     @UseInterceptors(
         FilesInterceptor(
@@ -105,6 +107,7 @@ export class MessageController {
         );
     }
 
+    @UseGuards(BlockGuard)
     @Post(":id/media")
     @UseInterceptors(
         FilesInterceptor(
@@ -127,6 +130,7 @@ export class MessageController {
         );
     }
 
+    @UseGuards(BlockGuard)
     @Post(":id/voice")
     @UseInterceptors(
         FileInterceptor(
@@ -148,6 +152,7 @@ export class MessageController {
         )
     }
 
+    @UseGuards(BlockGuard)
     @Post(":id/link-preview")
     public async linkPreview(
         @Param("id") room: ConversationIdDto["id"],
@@ -195,7 +200,7 @@ export class MessageController {
         return this.messageService.search(dto.q, room);
     }
 
-    @UseGuards(MessageConversationGuard)
+    @UseGuards(MessageConversationGuard, BlockGuard)
     @Post("/:id/react")
     public async reactMessage(
         @JwtDecode() user: JwtType,
@@ -208,7 +213,7 @@ export class MessageController {
         );
     }
 
-    @UseGuards(MessageConversationGuard)
+    @UseGuards(MessageConversationGuard, BlockGuard)
     @Patch("/:id/unreact")
     public async unreactMessage(
         @JwtDecode() user: JwtType,
@@ -247,7 +252,7 @@ export class MessageController {
         );
     }
 
-    @UseGuards(MessageConversationGuard)
+    @UseGuards(MessageConversationGuard, BlockGuard)
     @Post(":id/forward")
     public async forwardMessage(
         @JwtDecode() user: JwtType,

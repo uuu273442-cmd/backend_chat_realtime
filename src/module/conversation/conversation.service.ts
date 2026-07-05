@@ -11,6 +11,7 @@ import {
 import {Conversation, ConversationDocument} from "./schema/conversation.schema";
 
 import {UserService} from "../user/user.service";
+import {FriendService} from "../friend/friend.service";
 import {MessageService} from "../message/message.service";
 import {AttachmentService} from "../attachment/attachment.service";
 import {AttachmentDocument} from "../attachment/schema/attachment.schema";
@@ -35,6 +36,8 @@ export class ConversationService {
         private readonly chatGateway: ChatGateway,
         @Inject(forwardRef(() => UserService))
         private readonly userService: UserService,
+        @Inject(forwardRef(() => FriendService))
+        private readonly friendService: FriendService,
         @Inject(forwardRef(() => MessageService))
         private readonly messageService: MessageService,
         private readonly attachmentService: AttachmentService,
@@ -78,7 +81,15 @@ export class ConversationService {
         const conversation = await this.conversationModel.create({
             type: "private",
             createdBy: convertStringToObjectId(myUserId),
-            participants: this.groupParticipants(uniqueIds, myUserId)
+            // Nếu 2 người CHƯA phải bạn bè (nhắn tin thẳng không qua kết bạn),
+            // conversation tự lưu vào mục "Lưu trữ" phía người NHẬN (userId)
+            // để không làm phiền họ, nhưng vẫn hiện bình thường cho người GỬI.
+            // Người nhận vẫn thấy được trong archived list kèm dot thông báo.
+            participants: this.groupParticipants(
+                uniqueIds,
+                myUserId,
+                (await this.friendService.isFriend(myUserId, userId)) ? [] : [userId],
+            )
         });
         await conversation.populate("createdBy", "name");
 
@@ -503,12 +514,13 @@ export class ConversationService {
 
     private groupParticipants(
         userIds: string[],
-        ownerId: string
+        ownerId: string,
+        archivedForUserIds: string[] = []
     ): ConversationDocument["participants"] {
         return userIds.map(uid => ({
             userId: convertStringToObjectId(uid),
             role: uid === ownerId ? "owner" : "member",
-            isArchived: false,
+            isArchived: archivedForUserIds.includes(uid),
             isMuted: false,
             mutedUntil: null
         }));
