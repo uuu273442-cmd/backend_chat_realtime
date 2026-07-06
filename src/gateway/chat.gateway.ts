@@ -105,7 +105,14 @@ export class ChatGateway
 
         await this.userService.setOffline(userId);
         const lastSeen = new Date();
-        this.presenceEmit.userOffline(userId, lastSeen);
+
+        // Broadcast global (server.emit) không biết viewer là ai nên không thể
+        // check "friends" theo từng người xem — chỉ broadcast lastSeen thật khi
+        // privacy = "everyone". Còn lại ẩn giá trị trong broadcast (FE vẫn thấy
+        // đúng qua REST fetch nếu về sau họ là bạn bè và mở lại profile/chat).
+        const myPrivacy = await this.userService.getPrivacy(userId);
+        const canBroadcastLastSeen = myPrivacy.privacy?.lastSeenVisibility === "everyone";
+        this.presenceEmit.userOffline(userId, canBroadcastLastSeen ? lastSeen : null);
 
         this.logger.debug(`Client disconnected: ${userId}`);
     }

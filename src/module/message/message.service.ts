@@ -382,6 +382,10 @@ export class MessageService {
         });
         await message.populate(this.getArrayPopulate());
 
+        // attachmentService.uploadVoice() trả về 1 document đơn (không phải mảng)
+        // — bọc mảng ở đây để nhất quán với uploadFiles/uploadMedias và khớp với
+        // format FE mong đợi (msg.attachments[0]), tránh bug hiện bubble rỗng
+        // cho tới khi user refresh trang
         const voiceAttachment = await this.attachmentService.uploadVoice(
             file, message.id, userId, conversationId
         );
@@ -604,6 +608,13 @@ export class MessageService {
     ) {
         const conObjectId = convertStringToObjectId(conversationId);
         const userObjectId = convertStringToObjectId(user.userId);
+
+        // Tôn trọng privacy "Hiển thị đã xem" — nếu user tắt, KHÔNG ghi
+        // seenBy và KHÔNG báo cho người khác biết mình đã đọc tin nhắn
+        const myPrivacy = await this.userService.getPrivacy(user.userId);
+        if (!myPrivacy.privacy?.showReadReceipts) {
+            return { success: true, hidden: true };
+        }
 
         await this.messageModel.updateMany(
             {conversationId: conObjectId, seenBy: { $ne: userObjectId }},

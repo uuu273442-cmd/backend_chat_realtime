@@ -20,7 +20,7 @@ export class PresenceEmitService {
         });
     }
 
-    public userOffline(userId: string, lastSeen: Date) {
+    public userOffline(userId: string, lastSeen: Date | null) {
         this.server.emit(SOCKET_EVENTS.USER_STATUS_CHANGED, {
             userId,
             status: "offline",
