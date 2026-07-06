@@ -175,6 +175,17 @@ export class ChatGateway
         const ok = await this.conversationService.findUserParticipants(userId, data.conversationId);
         if (!ok) return;
 
+        // Không hiện "đang soạn tin" nếu 1 trong 2 đã chặn nhau (private chat)
+        const conv = await this.conversationService.findConversation(data.conversationId);
+        if (conv.type !== "group") {
+            const otherId = conv.participants.find(
+                (p) => p.userId.toString() !== userId
+            )?.userId.toString();
+            if (otherId && await this.userService.isBlocked(userId, otherId)) {
+                return;
+            }
+        }
+
         client
             .to(gatewayRooms.conversation(data.conversationId))
             .emit("user_typing", {conversationId: data.conversationId, userId});

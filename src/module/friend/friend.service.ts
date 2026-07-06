@@ -182,6 +182,36 @@ export class FriendService {
         return !!friend;
     }
 
+    /**
+     * Check quan hệ bạn bè giữa mình và 1 user cụ thể — dùng cho
+     * UserProfileModal để hiện đúng nút (Kết bạn / Đã gửi lời mời /
+     * Chấp nhận lời mời / Bạn bè)
+     */
+    public async getFriendStatus(myUserId: string, userId: string) {
+        const from = convertStringToObjectId(myUserId);
+        const to = convertStringToObjectId(userId);
+
+        const relation = await this.friendRequestModel.findOne({
+            $or: [
+                {from: from, to: to},
+                {from: to, to: from},
+            ]
+        }).sort({updatedAt: -1});
+
+        if (!relation) return {status: "none" as const};
+        if (relation.status === "accepted") return {status: "friends" as const};
+        if (relation.status === "pending") {
+            // Ai là người gửi lời mời quyết định nút hiện ra là gì
+            const iSent = relation.from.toString() === myUserId;
+            return {
+                status: iSent ? "request_sent" as const : "request_received" as const,
+                requestId: relation._id.toString(),
+            };
+        }
+        // rejected trước đó — cho phép gửi lại (coi như chưa có quan hệ)
+        return {status: "none" as const};
+    }
+
     public async findPhone(phone: string) {
         return this.userService.findUserByPhoneNumber(phone);
     }

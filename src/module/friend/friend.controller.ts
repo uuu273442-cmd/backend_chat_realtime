@@ -70,4 +70,12 @@ export class FriendController {
     public async findName(@Query() query: FindByNameDto) {
         return this.friendRequestService.findName(query.q);
     }
+
+    @Get("status/:userId")
+    public async getFriendStatus(
+        @Param("userId") userId: string,
+        @JwtDecode() user: JwtType,
+    ) {
+        return this.friendRequestService.getFriendStatus(user.userId, userId);
+    }
 }
