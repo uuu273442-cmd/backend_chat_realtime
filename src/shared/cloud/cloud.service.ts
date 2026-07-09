@@ -90,7 +90,7 @@ export class CloudService {
     }
 
     public async cleanDataFile(attachments: AttachmentDocument[]) {
-        const filesToDelete = {
+        const filesToDelete: {image: string[], video: string[], raw: string[]} = {
             image: [],
             video: [],
             raw: [],

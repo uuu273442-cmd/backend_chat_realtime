@@ -24,6 +24,7 @@ import {extractValidUrls} from "../../shared/utils/extractUrl.util";
 import {RedisCacheService} from "../../shared/redis/redisCache.service";
 
 import {JwtType} from "../../shared/types/jwtTypes.type";
+import { AttachmentDocument } from "../attachment/schema/attachment.schema";
 
 @Injectable()
 export class MessageService {
@@ -281,7 +282,7 @@ export class MessageService {
         }
         mgs.isPinned = false;
         mgs.pinByUser = null;
-        mgs.pinnedAt = null;
+        mgs.pinnedAt = undefined;
         await mgs.save();
 
         this.chatGateway.emitMessageUnpinned(conversationId, {
@@ -479,9 +480,9 @@ export class MessageService {
         const [groupAttachments, groupLinks, forwardedAttachments] = await Promise.all([
             this.attachmentService.groupAttachmentsById(messageIdsAttachments),
             this.linkPreviewService.groupLinkPreviewsById(messageIds),
-            forwardedMediaIds.length
-                ? this.attachmentService.groupAttachmentsById(forwardedMediaIds)
-                : Promise.resolve({}),
+            (forwardedMediaIds.length
+                ? this.attachmentService.groupAttachmentsById(forwardedMediaIds as Types.ObjectId[])
+                : Promise.resolve({})) as Promise<Record<string, AttachmentDocument[]>>,
         ]);
 
         const enriched = messages.map(m => {
@@ -495,10 +496,10 @@ export class MessageService {
                     : undefined);
 
             if (attachmentSource) {
-                m.attachments =
+                (m as any).attachments =
                     m.type === "voice" ? [attachmentSource[0]] : attachmentSource;
             }
-            if (groupLinks[id]) m.linkPreviews = groupLinks[id];
+            if (groupLinks[id]) (m as any).linkPreviews = groupLinks[id];
 
             return m;
         });
@@ -729,9 +730,9 @@ export class MessageService {
         // Lấy attachments/linkPreviews của root message 1 lần duy nhất
         const isMediaType = ["file", "media", "voice"].includes(rootMessage.type);
         const [rootAttachments, rootLinks] = await Promise.all([
-            isMediaType
+            (isMediaType
                 ? this.attachmentService.groupAttachmentsById([rootMessage._id])
-                : Promise.resolve({}),
+                : Promise.resolve({})) as Promise<Record<string, AttachmentDocument[]>>,
             this.linkPreviewService.groupLinkPreviewsById([rootMessage._id]),
         ]);
         const rootIdStr = rootMessage._id.toString();
@@ -765,11 +766,11 @@ export class MessageService {
 
                 // Gán attachments/linkPreviews từ root message
                 if (isMediaType && attachments.length) {
-                    m._doc.attachments =
+                    (m as any).attachments =
                         m.type === "voice" ? [attachments[0]] : attachments;
                 }
                 if (linkPreviews.length) {
-                    m._doc.linkPreviews = linkPreviews;
+                    (m as any).linkPreviews = linkPreviews;
                 }
 
                 this.chatGateway.emitMessageForwarded(

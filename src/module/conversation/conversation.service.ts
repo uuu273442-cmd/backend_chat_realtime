@@ -100,7 +100,7 @@ export class ConversationService {
             conversation: conversation,
             createdBy: {
                 _id: conversation.createdBy._id.toString(),
-                name: conversation.createdBy.name,
+                name: (conversation.createdBy as any).name,
             }
         });
 
@@ -112,7 +112,7 @@ export class ConversationService {
     ): Record<number, Record<number, T[]>> {
         const hashTable: Record<number, Record<number, T[]>> = {};
         for (const att of attachments) {
-            const date = new Date(att.createdAt);
+            const date = new Date((att as any).createdAt);
             const month = date.getMonth() + 1;
             const year = date.getFullYear();
             if (!hashTable[year]) hashTable[year] = {};
@@ -552,7 +552,7 @@ export class ConversationService {
             conversation: group,
             createdBy: {
                 _id: group.createdBy._id.toString(),
-                name: group.createdBy.name,
+                name: (group.createdBy as any).name,
             }
         });
 

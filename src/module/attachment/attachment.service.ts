@@ -88,12 +88,12 @@ export class AttachmentService {
         return this.attachmentModel.find({messageId: {$in: ids}}).lean();
     }
 
-    public async groupAttachmentsById(ids: Types.ObjectId[]) {
+    public async groupAttachmentsById(ids: Types.ObjectId[]): Promise<Record<string, AttachmentDocument[]>> {
         const attachments = await this.getAttachments(ids);
 
         return attachments.reduce<Record<string, AttachmentDocument[]>>(
             (acc, att) => {
-                const mgsId = att.messageId.toString();
+                const mgsId = att.messageId!.toString();
                 if (!acc[mgsId]) acc[mgsId] = [];
                 acc[mgsId].push(att);
                 return acc;
