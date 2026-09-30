@@ -4,6 +4,7 @@ import {
     forwardRef,
     Inject,
     Injectable,
+    Logger,
     NotFoundException
 } from "@nestjs/common";
 import {InjectModel} from "@nestjs/mongoose";
@@ -28,6 +29,8 @@ import { AttachmentDocument } from "../attachment/schema/attachment.schema";
 
 @Injectable()
 export class MessageService {
+    private readonly logger = new Logger(MessageService.name);
+
     constructor(
         @InjectModel(Message.name)
         private readonly messageModel: Model<MessageDocument>,
@@ -158,7 +161,6 @@ export class MessageService {
      * để frontend hiển thị message trong chat list ngay lập tức.
      */
     public async createCallMessage(dto: CreateCallMessageDto): Promise<MessageDocument> {
-        console.log('[createCallMessage] called with:', JSON.stringify(dto));
         const {
             conversationId,
             callerId,
@@ -688,7 +690,7 @@ export class MessageService {
             await this.redisCacheService.invalidateMessages(conversationId);
             return result;
         } catch (e) {
-            console.error(e);
+            this.logger.error(`[delete] error: ${e}`);
             throw e;
         }
     }

@@ -30,6 +30,7 @@ Trước khi bắt tay vào code, Gemini được dùng để tìm hiểu công 
 - [Socket Events Reference](#socket-events-reference)
 - [Environment Variables](#environment-variables)
 - [Getting Started](#getting-started)
+- [Cập nhật gần đây](#cập-nhật-gần-đây-tối-ưu-để-chạy-ổn-định-với-nhiều-người-dùng-hơn)
 
 ---
 
@@ -39,9 +40,9 @@ Trước khi bắt tay vào code, Gemini được dùng để tìm hiểu công 
 
 | Chức năng | Mô tả |
 |---|---|
-| Đăng ký / đăng nhập | JWT access token (15 phút) + refresh token (7 ngày), refresh token được hash bằng bcrypt trước khi lưu DB |
-| Refresh token | Cấp lại access token + refresh token mới, kiểm tra refresh token cũ bằng `bcrypt.compare` thay vì so sánh chuỗi thường |
-| Rate limit đăng nhập/đăng ký | Giới hạn 2 lần đăng ký/5 phút, 3 lần đăng nhập/phút, 5 lần refresh/phút bằng ThrottlerModule |
+| Đăng ký / đăng nhập | JWT access token (15 phút) + refresh token (7 ngày), refresh token được băm bằng SHA-256 trước khi lưu DB |
+| Refresh token | Cấp lại access token + refresh token mới, so sánh refresh token cũ bằng thuật toán so sánh không lộ thời gian xử lý (`timingSafeEqual`) thay vì so sánh chuỗi thường |
+| Rate limit đăng nhập/đăng ký | Giới hạn 10 lần đăng ký/10 phút, 20 lần đăng nhập/phút, 30 lần refresh/phút cho mỗi IP bằng ThrottlerModule (số cũ 2-3-5 lần quá thấp, dễ tự khóa nhầm người dùng thật khi nhiều người dùng chung 1 mạng Wi-Fi/4G) |
 | Hồ sơ cá nhân | Xem/sửa thông tin, avatar, bio, trạng thái (online/away/busy/offline), custom status message |
 | Cài đặt riêng tư | Ai được xem lastSeen (everyone/friends/nobody), bật/tắt read receipt, bật/tắt hiển thị đang gõ |
 | Tìm người dùng | Tìm theo số điện thoại hoặc theo tên (MongoDB text index) |
@@ -114,6 +115,7 @@ Trước khi bắt tay vào code, Gemini được dùng để tìm hiểu công 
 | Upload | Multer + Cloudinary |
 | Validate | `class-validator` + `class-transformer` (ValidationPipe global) |
 | Link preview | `axios` + `cheerio` (crawl title/description/ảnh từ URL) |
+| Nén phản hồi | `compression` (gzip middleware) |
 
 ### Frontend
 
@@ -174,7 +176,7 @@ Rate limit toàn cục 15 request/30 giây (ThrottlerGuard gắn ở `APP_GUARD`
     showTypingIndicator: Boolean,
   },
   lastSeen: Date,
-  refreshToken: String,       // bcrypt hash, null nếu đã logout
+  refreshToken: String,       // SHA-256 hash, null nếu đã logout
   timestamps: true,
 }
 // Index: email (unique), phoneNumber (unique), name (text — tìm kiếm theo tên)
@@ -516,22 +518,24 @@ Project-chat-realtime-backend/
 ### 1. Authentication Flow (JWT + Refresh Token)
 
 ```
-POST /api/auth/register  (giới hạn 2 lần/5 phút)
+POST /api/auth/register  (giới hạn 10 lần/10 phút cho mỗi IP)
   ├─→ Kiểm tra email và số điện thoại chưa tồn tại
   ├─→ Kiểm tra password === passwordConfirm
   └─→ Tạo User (password tự hash qua pre-save hook của schema)
 
-POST /api/auth/login  (giới hạn 3 lần/phút, qua LocalAuthGuard)
+POST /api/auth/login  (giới hạn 20 lần/phút cho mỗi IP, qua LocalAuthGuard)
   ├─→ validateUser(): tìm theo email, bcrypt.compare password
   ├─→ Tạo accessToken (payload: sub, name, avatar, email — hết hạn 15 phút)
   ├─→ Tạo refreshToken (thêm jti random để mỗi token là duy nhất — hết hạn 7 ngày)
-  ├─→ bcrypt.hash(refreshToken) trước khi lưu vào User.refreshToken
+  ├─→ SHA-256(refreshToken) trước khi lưu vào User.refreshToken
   └─→ Trả về { accessToken, refreshToken, user }
 
-POST /api/auth/refresh  (giới hạn 5 lần/phút)
+POST /api/auth/refresh  (giới hạn 30 lần/phút cho mỗi IP)
   ├─→ jwtService.verify(refreshToken, JWT_SECRET_REFRESH)
   ├─→ Tìm User theo payload.sub
-  ├─→ bcrypt.compare(refreshToken, user.refreshToken) — không so sánh chuỗi thường
+  ├─→ So sánh SHA-256(refreshToken) với giá trị đã lưu bằng timingSafeEqual
+  │     (giá trị cũ được hash bằng bcrypt trước đây vẫn được chấp nhận 1 lần
+  │      rồi tự chuyển sang SHA-256 ở lần refresh kế tiếp)
   ├─→ Nếu hợp lệ: cấp accessToken + refreshToken mới, hash rồi lưu đè vào DB
   └─→ Nếu không khớp: 401 "Refresh token reused or invalid"
 
@@ -541,6 +545,10 @@ POST /api/auth/logout  (JwtAuthGuard)
 Socket.IO cũng xác thực bằng JWT: token gửi qua handshake.auth.token,
 verify bằng cùng JWT_SECRET; nếu không hợp lệ thì client bị disconnect ngay
 tại handleConnection.
+
+Ghi chú: JwtStrategy nhớ tạm (trong bộ nhớ, 60 giây) những userId đã xác
+nhận là còn tồn tại, để không phải truy vấn MongoDB ở mọi request có kèm
+access token — chỉ truy vấn lại khi bản ghi nhớ đã hết hạn hoặc chưa có.
 ```
 
 ---
@@ -648,15 +656,26 @@ Server chỉ làm nhiệm vụ "signaling" (chuyển tiếp thông tin kết n�
 không xử lý luồng audio/video — audio/video đi trực tiếp giữa 2 client
 qua kết nối peer-to-peer (WebRTC) sau khi đã bắt tay xong.
 
+GET /api/calls/ice-servers  (JwtAuthGuard)
+  Trả về danh sách máy chủ STUN/TURN cho client dùng khi tạo
+  RTCPeerConnection. STUN không cần cấu hình gì thêm (có sẵn giá trị mặc
+  định), TURN cần khai báo qua biến môi trường TURN_URLS / TURN_USERNAME /
+  TURN_CREDENTIAL — xem mục "Environment Variables" và phần "Giới hạn đã
+  biết" bên dưới về lý do TURN quan trọng cho cuộc gọi giữa 2 mạng khác nhau.
+
 [Gọi 1-1]
 
 Client A: emit "call_initiate" { calleeId, callType }
   ├─→ Kiểm tra callee có đang bận (redisCallService.isUserInCall)
   │     → bận: emit "call_busy" về A
   ├─→ redisCallService.createCall(...) — lưu vào Redis, TTL 2 giờ
-  └─→ emit "call_initiated" tới room user:{calleeId}
+  ├─→ emit "call_initiated" tới room user:{calleeId}
+  └─→ Đặt hẹn giờ đổ chuông 45 giây (RING_TIMEOUT_MS) — nếu callee không
+        bắt máy/từ chối/huỷ trong thời gian này, cuộc gọi tự đóng ở cả 2
+        phía và được ghi lại là "nhỡ", thay vì treo màn hình gọi vô thời hạn
 
 Client B: emit "call_accept" { callId }
+  ├─→ Huỷ hẹn giờ đổ chuông ở trên
   ├─→ redisCallService.setStartedAt(callId)
   ├─→ addParticipant(callId, B)
   └─→ emit "call_accepted" về A
@@ -670,6 +689,7 @@ call_ice_candidate → forward tới người còn lại trong cuộc gọi
 [Kết thúc]
 
 call_end / call_cancel / call_reject
+  ├─→ Huỷ hẹn giờ đổ chuông nếu còn (trường hợp kết thúc trước khi hết giờ)
   ├─→ deleteCall(callId, participantIds) trên Redis
   ├─→ Ghi lại Message type "call" với callInfo (status, duration)
   └─→ emit "call_ended" về phía còn lại
@@ -681,14 +701,29 @@ handleDisconnect trên gateway:
   └─→ Nếu có: tự dọn participant/call giống như khi emit call_end
         (nếu không cleanup, TTL 2 giờ trên Redis vẫn tự xóa sau cùng)
 
-[Gọi nhóm]
+[Gọi nhóm — chỉ hỗ trợ THOẠI, không có video]
 
 group_call_start / group_call_join / group_call_leave / group_call_end
+  ├─→ callType gửi lên bị ép về "voice" bất kể client gửi gì (xem phần
+  │     "Giới hạn đã biết" bên dưới về lý do bỏ video nhóm)
   ├─→ redisCallService lưu theo callId + set các participant trong
   │     call:{callId}:members
   ├─→ setActiveGroupCall(conversationId, callId) — tránh tạo 2 cuộc gọi
   │     nhóm cùng lúc trong 1 conversation khi có người bấm gọi trùng lúc
   └─→ Emit group_call_started / joined / left / ended cho cả room conversation
+
+[Giới hạn đã biết]
+
+- Chỉ có STUN là chưa đủ để 2 máy ở 2 mạng khác nhau (ví dụ 2 nhà mạng 4G
+  khác nhau, hoặc mạng có NAT/firewall chặt) tự tìm thấy nhau. Cần thêm một
+  máy chủ TURN (miễn phí có thể dùng Cloudflare Calls, Metered.ca, hoặc tự
+  dựng coturn) và khai báo qua TURN_URLS/TURN_USERNAME/TURN_CREDENTIAL thì
+  các trường hợp này mới gọi được ổn định — phần này KHÔNG thể giải quyết
+  chỉ bằng code, cần một dịch vụ TURN thật.
+- Gọi nhóm dùng kiến trúc "mesh" (n người thì mỗi người mở n-1 kết nối
+  ngang hàng) — phù hợp cho nhóm nhỏ (khoảng dưới 6-8 người cùng lúc trong
+  1 cuộc gọi). Nhóm rất đông gọi cùng lúc sẽ cần một máy chủ media (SFU)
+  chuyên dụng, nằm ngoài phạm vi sửa đổi lần này.
 ```
 
 ---
@@ -769,10 +804,22 @@ POST /api/messages/:id/voice   (voice message, kèm duration)
 
 | Method | Path | Mô tả | Giới hạn |
 |---|---|---|---|
-| POST | `/api/auth/register` | Đăng ký | 2 lần/5 phút |
-| POST | `/api/auth/login` | Đăng nhập | 3 lần/phút |
-| POST | `/api/auth/refresh` | Làm mới access token | 5 lần/phút |
+| POST | `/api/auth/register` | Đăng ký | 10 lần/10 phút |
+| POST | `/api/auth/login` | Đăng nhập | 20 lần/phút |
+| POST | `/api/auth/refresh` | Làm mới access token | 30 lần/phút |
 | POST | `/api/auth/logout` | Đăng xuất | Auth |
+
+### Calls (`/api/calls`)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/calls/ice-servers` | Danh sách máy chủ STUN/TURN cho WebRTC |
+
+### Health (`/api/health`)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/health` | Kiểm tra server còn sống — không truy vấn DB, dùng cho dịch vụ ping định kỳ |
 
 ### Users (`/api/users`)
 
@@ -908,7 +955,15 @@ Toàn bộ tên event được khai báo tập trung tại `gateway/gateway.cons
 
 ```env
 PORT=3000
+# Domain frontend được phép gọi API/socket, cách nhau bằng dấu phẩy nếu có
+# nhiều domain (ví dụ vừa có domain Vercel chính vừa có domain xem trước PR).
+# Để trống thì mặc định cho phép tất cả (chỉ nên dùng khi đang phát triển local).
 URL_FE_CONNECT=http://localhost:5173
+
+# Số lượng reverse proxy đứng trước server (Render có 1 lớp proxy) — dùng để
+# Express lấy đúng IP thật của người dùng, phục vụ tính năng giới hạn request
+# theo IP (rate limit). Để mặc định 1 nếu deploy trên Render.
+TRUST_PROXY_HOPS=1
 
 MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/<dbname>
 
@@ -922,6 +977,23 @@ CLOUD_API_SECRET=your_cloudinary_api_secret
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_PASSWORD=
+
+# STUN/TURN cho cuộc gọi WebRTC — trả về qua GET /api/calls/ice-servers.
+# STUN không bắt buộc khai báo (có giá trị mặc định của Google), nhưng TURN
+# thì cần một dịch vụ thật mới hoạt động được. Không có TURN, cuộc gọi giữa
+# 2 người ở 2 mạng khác nhau (ví dụ 2 nhà mạng 4G khác nhau) có thể không
+# kết nối được — xem thêm ở mục "Giới hạn đã biết" trong phần Application
+# Workflows > Cuộc gọi thoại/video.
+STUN_URLS=stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302
+TURN_URLS=
+TURN_USERNAME=
+TURN_CREDENTIAL=
+
+# (Không bắt buộc) nhà cung cấp TURN thứ 2, dùng làm dự phòng nếu nhà cung
+# cấp chính hết quota hoặc gặp sự cố — để trống nếu chỉ dùng 1 nhà cung cấp.
+TURN_URLS_2=
+TURN_USERNAME_2=
+TURN_CREDENTIAL_2=
 ```
 
 File `.env` đã có trong `.gitignore`, không commit lên repository.
@@ -963,6 +1035,94 @@ Cần Redis server đang chạy trước khi start Backend — `RedisModule` k�
 
 ---
 
-## Author
+## Cập nhật gần đây (tối ưu để chạy ổn định với nhiều người dùng hơn)
+
+Đợt cập nhật này tập trung vào việc ứng dụng chạy ổn định hơn ở môi trường
+thật (Render + Vercel, đều dùng gói miễn phí), sửa các lỗi phát sinh khi
+dùng ở mạng thật thay vì local, và dọn bớt code/tài nguyên không dùng đến.
+Chi tiết từng thay đổi theo file/dòng nằm trong `BAO_CAO_CAP_NHAT.md` ở
+thư mục gốc của repo.
+
+**Backend**
+
+- Không còn tạo chuỗi request đến database ở mỗi request có kèm access
+  token — `JwtStrategy` nhớ tạm trong bộ nhớ 60 giây rằng một user còn tồn
+  tại, chỉ truy vấn lại khi hết hạn bản ghi nhớ.
+- Refresh token chuyển sang băm bằng SHA-256 và so sánh bằng thuật toán
+  không lộ thời gian xử lý (`timingSafeEqual`) thay vì `bcrypt.compare` —
+  refresh token là chuỗi ngẫu nhiên (không phải mật khẩu người dùng tự đặt)
+  nên không cần thuật toán chậm có "salt" như bcrypt; giá trị bcrypt cũ vẫn
+  được chấp nhận một lần rồi tự chuyển sang SHA-256.
+- Giới hạn số request (rate limit) cho đăng ký/đăng nhập/làm mới token được
+  nới ra mức thực tế hơn (xem bảng ở mục Environment Variables và API Routes
+  Reference) — số cũ quá thấp, dễ khóa nhầm người dùng thật khi nhiều người
+  dùng chung 1 mạng Wi-Fi/4G (cùng 1 địa chỉ IP công khai).
+- Thêm endpoint `GET /api/calls/ice-servers` trả về danh sách STUN/TURN
+  cho client, thay vì client tự hardcode sẵn một danh sách STUN cố định.
+  Hỗ trợ khai báo thêm một nhà cung cấp TURN thứ 2 làm dự phòng (biến môi
+  trường `TURN_URLS_2` / `TURN_USERNAME_2` / `TURN_CREDENTIAL_2`) — không
+  bắt buộc, để trống thì chỉ dùng 1 nhà cung cấp như trước.
+- Cuộc gọi 1-1 không bắt máy sau 45 giây tự đóng ở cả 2 phía và được ghi
+  nhận là "nhỡ", thay vì treo màn hình gọi không giới hạn thời gian.
+- Gọi nhóm chỉ còn hỗ trợ thoại — server ép `callType` về `"voice"` bất kể
+  client gửi gì lên, để tránh mô hình gọi video nhiều người cùng lúc
+  (mesh WebRTC) làm quá tải server free-tier.
+- Bật nén phản hồi (gzip qua middleware `compression`), cấu hình
+  `trust proxy` đúng cho môi trường có reverse proxy (Render), và danh sách
+  domain frontend được phép gọi API (`CORS`) đọc từ danh sách thay vì một
+  giá trị chuỗi đơn.
+- Endpoint `GET /api/health` phục vụ việc ping định kỳ giữ server free-tier
+  trên Render không bị ngủ đông.
+- Một số hàm chỉ cần biết "có tồn tại hay không" đổi từ `findOne` sang
+  `exists`, và endpoint danh sách người dùng không còn trả về nguyên văn
+  document (từng lộ mật khẩu đã băm và refresh token trong response).
+- Thêm `socket-io.adapter.ts`, gắn vào `main.ts` qua `app.useWebSocketAdapter(...)`,
+  để danh sách domain được phép (CORS) áp dụng nhất quán cho cả tầng
+  Socket.IO chứ không chỉ REST API.
+
+**Frontend**
+
+- Sửa lỗi header cuộc trò chuyện bị che khi cuộn trên điện thoại — nguyên
+  nhân là dùng đơn vị chiều cao `100vh`, vốn không tính đến việc thanh địa
+  chỉ trình duyệt di động tự ẩn/hiện; đổi sang `100dvh`.
+- Kết nối Socket.IO cho phép bắt đầu bằng polling rồi nâng cấp lên
+  websocket (mặc định của Engine.IO) thay vì ép chỉ dùng websocket — tránh
+  cảnh báo kết nối thất bại lúc backend Render đang khởi động lại sau khi
+  ngủ đông (cold start), đồng thời cấu hình tự kết nối lại khi mất mạng.
+- Cuộc gọi 1-1 và gọi nhóm lấy danh sách STUN/TURN từ backend thay vì
+  hardcode sẵn, và tự huỷ nếu không kết nối được sau một khoảng thời gian
+  thay vì hiển thị "Đang kết nối..." vô thời hạn khi 2 máy ở 2 mạng khác
+  nhau không tự bắt được nhau qua STUN. Việc tải danh sách ICE server được
+  `await` ngay trước khi tạo peer connection (trước đây chỉ tải ngầm lúc mở
+  modal, có thể chưa tải xong khi 2 bên bắt máy quá nhanh, khiến cuộc gọi
+  vô tình chạy với STUN mặc định thay vì danh sách đầy đủ có TURN). Khi
+  không lấy được micro/camera, phía đó chủ động báo cho bên kia và đóng
+  cuộc gọi ngay, thay vì để bên kia phải tự chờ hết giờ connect-timeout.
+  Có thêm cờ debug `localStorage.setItem('ice_transport_policy', 'relay')`
+  để ép cuộc gọi test chỉ đi qua TURN, phục vụ việc xác định lỗi mạng.
+- Giao diện cuộc gọi video: avatar tròn không còn hiển thị đè lên video khi
+  cuộc gọi đã kết nối (trước đây che mất một phần khuôn mặt và góc video
+  nhỏ của bản thân).
+- Gọi nhóm chỉ còn nút gọi thoại, bỏ nút gọi video nhóm và toàn bộ code xử
+  lý camera trong màn hình gọi nhóm.
+- Trang đăng nhập (`AuthPage`) và trang chat (`ChatPage` cùng các trang con)
+  được tải theo route thay vì gộp chung vào 1 file JavaScript duy nhất;
+  màn hình gọi (`CallModal`, `GroupCallModal`) cũng tải riêng khi có cuộc
+  gọi. Dung lượng JavaScript tải lần đầu giảm từ khoảng 638KB xuống còn
+  khoảng 283KB (đo bằng `npm run build`, chưa nén gzip).
+- `authService.ts` tự thêm `/api` vào cuối `VITE_API_URL` nếu thiếu — toàn bộ
+  route backend đều có tiền tố `/api`, cấu hình thiếu đoạn này trên Vercel
+  từng khiến mọi request REST bị lỗi 404. Đây là lưới an toàn, không thay
+  thế việc phải cấu hình đúng giá trị này trên Vercel và deploy lại (Vite
+  gắn cứng biến môi trường vào lúc build).
+- Xoá các file không còn được import ở đâu trong code: component
+  `ProfileView.tsx` (410 dòng, đã có chức năng tương đương trong
+  `SettingsModal.tsx`), cùng khoảng 900KB ảnh nền và icon mẫu mặc định của
+  Vite/React trong thư mục `public/` — các file trong `public/` được deploy
+  nguyên trạng lên Vercel dù không được code nào tham chiếu tới.
+
+---
+
+
 
 Dự án cá nhân, thực hành xây dựng backend realtime với NestJS, MongoDB, Redis và Socket.IO, kèm phần frontend React để hoàn thiện một ứng dụng chat sử dụng được đầu cuối.

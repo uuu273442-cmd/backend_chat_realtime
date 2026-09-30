@@ -2,6 +2,7 @@ import {CanActivate, ExecutionContext, ForbiddenException} from "@nestjs/common"
 import {Injectable} from "@nestjs/common";
 import {UserService} from "../user.service";
 import {ConversationService} from "../../conversation/conversation.service";
+import {ConversationDocument} from "../../conversation/schema/conversation.schema";
 
 @Injectable()
 export class BlockGuard implements CanActivate {
@@ -16,7 +17,9 @@ export class BlockGuard implements CanActivate {
         const room = req.params.id;
         const userId = req.user.userId;
 
-        const findConv = await this.conversationService.findConversation(room);
+        // Ưu tiên dùng conversation đã được ConversationParticipantGuard tải sẵn
+        const findConv: ConversationDocument = req.conversation
+            ?? await this.conversationService.findConversation(room);
         if (findConv.type === "group") return true;
         const otherId = findConv.participants.find(
             obj => obj.userId.toString() !== userId

@@ -12,7 +12,9 @@ import {MessageModule} from "./module/message/message.module";
 import {ChatModule} from "./gateway/chat.module";
 import {FriendModule} from "./module/friend/friend.module";
 import {AttachmentModule} from "./module/attachment/attachment.module";
-import { RedisModule } from "./shared/redis/redis.module";
+import {CallModule} from "./module/call/call.module";
+import {HealthModule} from "./module/health/health.module";
+import {RedisModule} from "./shared/redis/redis.module";
 
 @Module({
     imports: [
@@ -22,10 +24,13 @@ import { RedisModule } from "./shared/redis/redis.module";
         MongooseModule.forRootAsync({
             useFactory: mongooseConfig
         }),
+        // Giới hạn chung: 300 request mỗi phút cho mỗi IP.
+        // Các API đăng nhập, đăng ký có giới hạn riêng chặt hơn (xem auth.controller.ts).
+        // Giới hạn cũ (15 request mỗi 30 giây) quá thấp, chỉ mở một cuộc trò chuyện đã dùng hết.
         ThrottlerModule.forRoot([
             {
-                limit: 15,
-                ttl: 30000
+                limit: 300,
+                ttl: 60000
             },
         ]),
         RedisModule,
@@ -35,7 +40,9 @@ import { RedisModule } from "./shared/redis/redis.module";
         MessageModule,
         FriendModule,
         ChatModule,
-        AttachmentModule
+        AttachmentModule,
+        CallModule,
+        HealthModule,
     ],
     providers: [
         {

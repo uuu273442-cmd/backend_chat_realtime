@@ -19,22 +19,23 @@ export class AuthController {
     ) {
     }
 
-    // FIX [SECURITY]: Thêm rate limit cho register — 2 lần/5 phút để chặn tạo fake accounts hàng loạt
-    @Throttle({default: {limit: 2, ttl: 300000}})
+    // Đăng ký: tối đa 10 lần mỗi 10 phút cho mỗi IP để chặn tạo tài khoản hàng loạt
+    @Throttle({default: {limit: 10, ttl: 600000}})
     @Post("register")
     public async register(@Body() body: InputRegisterUserDto) {
         return this.authService.register(body);
     }
 
-    // FIX [SECURITY]: Giảm login limit từ 5 xuống 3 lần/phút để hạn chế credential stuffing
+    // Đăng nhập: tối đa 20 lần mỗi phút cho mỗi IP để hạn chế dò mật khẩu
     @UseGuards(LocalAuthGuard)
-    @Throttle({default: {limit: 3, ttl: 60000}})
+    @Throttle({default: {limit: 20, ttl: 60000}})
     @Post("login")
     public async login(@User() user: UserDocument) {
         return this.authService.login(user);
     }
 
-    @Throttle({default: {limit: 5, ttl: 60000}})
+    // Làm mới token: tối đa 30 lần mỗi phút cho mỗi IP
+    @Throttle({default: {limit: 30, ttl: 60000}})
     @Post("refresh")
     public async refresh(@Body("refreshToken") refreshToken: string) {
         return this.authService.refresh(refreshToken);

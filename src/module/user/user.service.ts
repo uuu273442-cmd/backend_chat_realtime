@@ -28,8 +28,13 @@ export class UserService {
     ) {
     }
 
+    // Danh sách người dùng chỉ trả về thông tin công khai.
+    // Trước đây trả toàn bộ document nên lộ mật khẩu đã băm và refresh token.
     public async users() {
-        return this.userModel.find({}).lean();
+        return this.userModel
+            .find({}, {name: 1, avatar: 1, status: 1})
+            .limit(200)
+            .lean();
     }
 
     public async create(dto: registerDto) {
@@ -41,8 +46,13 @@ export class UserService {
         return this.userModel.findById(convertStringToObjectId(userId)).lean();
     }
 
+    // Chỉ cần biết có tồn tại hay không nên dùng exists, không tải cả document
+    public async existsById(userId: string) {
+        return !!(await this.userModel.exists({_id: convertStringToObjectId(userId)}));
+    }
+
     public async findByEmail(email: string) {
-        return !!(await this.userModel.findOne({email}));
+        return !!(await this.userModel.exists({email}));
     }
 
     public async getInfoByEmail(email: string) {
@@ -50,7 +60,7 @@ export class UserService {
     }
 
     public async findByPhoneNumber(phoneNumber: string) {
-        return !!(await this.userModel.findOne({phoneNumber}));
+        return !!(await this.userModel.exists({phoneNumber}));
     }
 
     public async updateRefreshToken(userId: string, token: string | null) {
@@ -61,7 +71,6 @@ export class UserService {
     }
 
     public async listUser(userId: string) {
-        // const objIds = userIds.map(uid => convertStringToObjectId(uid));
         return this.userModel.find(
             {_id: {$ne: convertStringToObjectId(userId)}},
             {
@@ -154,10 +163,11 @@ export class UserService {
             .lean();
     }
 
+    // Hai người có chặn nhau (theo bất kỳ chiều nào) hay không
     public async isBlocked(myUserId: string, userId: string) {
         const objMyId = convertStringToObjectId(myUserId);
         const objUserId = convertStringToObjectId(userId);
-        const record = await this.blockUserModel.findOne({
+        const record = await this.blockUserModel.exists({
             $or: [
                 {blockerId: objMyId, blockedId: objUserId},
                 {blockerId: objUserId, blockedId: objMyId},

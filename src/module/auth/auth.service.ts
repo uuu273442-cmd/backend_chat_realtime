@@ -2,7 +2,7 @@ import {ConflictException, Injectable, UnauthorizedException} from "@nestjs/comm
 import * as bcrypt from "bcrypt";
 import {JwtService} from "@nestjs/jwt";
 import {ConfigService} from "@nestjs/config";
-import {randomUUID} from "crypto"
+import {createHash, randomUUID, timingSafeEqual} from "crypto";
 
 import {UserService} from "../user/user.service";
 import {InputRegisterUserDto} from "./dto/inputRegister.dto";
@@ -19,17 +19,23 @@ export class AuthService {
     }
 
     public async register(dto: InputRegisterUserDto) {
-        const existEmail = await this.userService.findByEmail(dto.email);
-        const existPhoneNumber = await this.userService.findByPhoneNumber(dto.phoneNumber);
+        // Kiểm tra mật khẩu trước vì không cần truy vấn database
+        if (dto.password !== dto.passwordConfirm) {
+            throw new ConflictException("Passwords do not match");
+        }
+
+        // Hai truy vấn độc lập nên chạy song song để nhanh hơn
+        const [existEmail, existPhoneNumber] = await Promise.all([
+            this.userService.findByEmail(dto.email),
+            this.userService.findByPhoneNumber(dto.phoneNumber),
+        ]);
         if (existEmail) {
             throw new ConflictException("Email already exists");
         }
         if (existPhoneNumber) {
             throw new ConflictException("Phone number already exists");
         }
-        if (dto.password !== dto.passwordConfirm) {
-            throw new ConflictException("Passwords do not match");
-        }
+
         const data: registerDto = {
             password: dto.password,
             phoneNumber: dto.phoneNumber,
@@ -47,7 +53,8 @@ export class AuthService {
         return user;
     }
 
-    public async login(user: UserDocument) {
+    // Tạo access token (15 phút) và refresh token (7 ngày).
+    private createTokens(user: {_id: any; name: string; avatar?: string | null; email: string}) {
         const payload = {
             sub: user._id.toString(),
             name: user.name,
@@ -55,25 +62,43 @@ export class AuthService {
             email: user.email
         };
 
-        const accessToken = this.jwtService.sign(payload, {
-            expiresIn: "15m"
-        });
+        const accessToken = this.jwtService.sign(payload, {expiresIn: "15m"});
         const refreshToken = this.jwtService.sign(
             {...payload, jti: randomUUID()},
-            {
-                secret: this.getConfigSecretRefresh(),
-                expiresIn: "7d"
-            }
+            {secret: this.getConfigSecretRefresh(), expiresIn: "7d"}
         );
+        return {payload, accessToken, refreshToken};
+    }
 
-        // FIX [SECURITY CRITICAL]: Hash refresh token trước khi lưu vào DB
-        // Nếu DB bị leak, token plain text sẽ bị lộ hoàn toàn
-        const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
-        await this.userService.updateRefreshToken(payload.sub, hashedRefreshToken);
+    // Refresh token được băm bằng SHA-256 trước khi lưu vào database.
+    // Không dùng bcrypt vì bcrypt chỉ đọc 72 ký tự đầu, phần đầu của mọi JWT
+    // cùng một người dùng giống nhau nên các token khác nhau bị coi là trùng.
+    private hashRefreshToken(token: string): string {
+        return createHash("sha256").update(token).digest("hex");
+    }
+
+    // So sánh refresh token gửi lên với giá trị đã lưu.
+    // Giá trị bcrypt cũ (bắt đầu bằng "$2") vẫn được chấp nhận một lần
+    // và sẽ được thay bằng SHA-256 khi token được làm mới.
+    private async isRefreshTokenValid(token: string, stored: string): Promise<boolean> {
+        if (stored.startsWith("$2")) {
+            return bcrypt.compare(token, stored);
+        }
+        const a = Buffer.from(this.hashRefreshToken(token));
+        const b = Buffer.from(stored);
+        return a.length === b.length && timingSafeEqual(a, b);
+    }
+
+    public async login(user: UserDocument) {
+        const {payload, accessToken, refreshToken} = this.createTokens(user);
+        await this.userService.updateRefreshToken(payload.sub, this.hashRefreshToken(refreshToken));
+
+        // Không trả mật khẩu đã băm về cho client
+        const {password: _password, ...safeUser} = user as any;
         return {
             accessToken,
             refreshToken,
-            user
+            user: safeUser
         };
     }
 
@@ -88,35 +113,20 @@ export class AuthService {
                 throw new UnauthorizedException();
             }
 
-            // FIX [SECURITY CRITICAL]: So sánh bằng bcrypt.compare thay vì === plain text
-            // Trước đây: refreshToken !== user.refreshToken (plain text comparison)
-            const isValid = await bcrypt.compare(refreshToken, user.refreshToken);
+            const isValid = await this.isRefreshTokenValid(refreshToken, user.refreshToken);
             if (!isValid) {
                 throw new UnauthorizedException("Refresh token reused or invalid");
             }
 
-            const newPayload = {
-                sub: user._id.toString(),
-                name: user.name,
-                email: user.email
-            };
-            const newAccessToken = this.jwtService.sign(newPayload, {
-                expiresIn: "15m",
-            });
-            const newRefreshToken = this.jwtService.sign(
-                {...newPayload, jti: randomUUID()},
-                {
-                    secret: this.getConfigSecretRefresh(),
-                    expiresIn: "7d",
-                }
+            // Mỗi lần làm mới sẽ cấp cặp token mới và thu hồi token cũ
+            const tokens = this.createTokens(user);
+            await this.userService.updateRefreshToken(
+                tokens.payload.sub,
+                this.hashRefreshToken(tokens.refreshToken)
             );
-
-            // Hash token mới trước khi lưu
-            const hashedNewRefreshToken = await bcrypt.hash(newRefreshToken, 10);
-            await this.userService.updateRefreshToken(newPayload.sub, hashedNewRefreshToken);
             return {
-                accessToken: newAccessToken,
-                refreshToken: newRefreshToken,
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
             };
         } catch {
             throw new UnauthorizedException("Invalid refresh token");
