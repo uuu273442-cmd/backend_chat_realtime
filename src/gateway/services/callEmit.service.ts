@@ -25,12 +25,12 @@ export class CallEmitService {
         callerId: string,
         callerInfo: {name: string, avatar?: string},
         conversationId: string;
-        callType: "voice" | "video";
+        callType: "voice";
     }) {
         this.toUser(calleId).emit(SOCKET_EVENTS.CALL_INITIATED, payload);
     }
 
-    // Emit callId về cho caller ngay sau khi tạo call
+    // gửi callId về cho người gọi
     public callStarted(callerId: string, payload: {callId: string; callType: string}) {
         this.toUser(callerId).emit(SOCKET_EVENTS.CALL_STARTED, payload);
     }
@@ -83,7 +83,7 @@ export class CallEmitService {
         callId: string;
         conversationId: string;
         hostId: string;
-        callType: "voice" | "video";
+        callType: "voice";
     }) {
         this.toConversation(conversationId).emit(SOCKET_EVENTS.GROUP_CALL_STARTED, payload);
     }
@@ -110,7 +110,7 @@ export class CallEmitService {
         this.toConversation(conversationId).emit(SOCKET_EVENTS.GROUP_CALL_ENDED, payload);
     }
 
-    // Emit danh sách participants hiện tại riêng cho user mới join
+    // gửi danh sách người đang có mặt cho người mới vào
     public groupCallParticipants(userId: string, payload: {
         callId: string;
         existingParticipants: { userId: string; name: string; avatar?: string }[];
@@ -118,8 +118,7 @@ export class CallEmitService {
         this.toUser(userId).emit(SOCKET_EVENTS.GROUP_CALL_PARTICIPANTS, payload);
     }
 
-    // Báo cho user biết conversation đã có call đang chạy — redirect sang call đó
-    // thay vì tạo call mới (fix trường hợp rejoin / bấm gọi trùng)
+    // nhóm đã có cuộc gọi, chuyển người dùng vào cuộc gọi đó
     public groupCallRedirect(userId: string, payload: {
         callId: string;
         conversationId: string;

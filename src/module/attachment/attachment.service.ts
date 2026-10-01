@@ -76,10 +76,7 @@ export class AttachmentService {
         file: Express.Multer.File,
         uploaderId: string,
     ) {
-        // Avatar không gắn với message/conversation nào — chỉ cần upload lên
-        // cloud và trả về URL string, không tạo Attachment document (tránh
-        // record rác với messageId/conversationId null, và tránh bug cũ
-        // set type: "voice" sai + trả về cả document thay vì URL string)
+        // avatar chỉ upload lên cloud và trả về url, không tạo attachment
         const upload = await this.cloudService.uploadSingle(file, "image");
         return upload.url;
     }

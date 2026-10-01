@@ -15,7 +15,6 @@ import {LinkPreviewModule} from "../link-preview/link-preview.module";
 import {RequestJoinRoomModule} from "../requestJoinRoom/requestJoinRoom.module";
 import {FriendModule} from "../friend/friend.module";
 import {ChatModule} from "../../gateway/chat.module";
-import {AnnouncementModule} from "../announcements/announcement.module";
 import { RedisCacheService } from "../../shared/redis/redisCache.service";
 
 @Module({
@@ -26,7 +25,6 @@ import { RedisCacheService } from "../../shared/redis/redisCache.service";
         forwardRef(() => UsersModule),
         AttachmentModule,
         LinkPreviewModule,
-        AnnouncementModule,
         RequestJoinRoomModule,
         MongooseModule.forFeature([{
             name: Conversation.name,

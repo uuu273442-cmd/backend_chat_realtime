@@ -1,40 +1,37 @@
-import {IsEnum, IsMongoId, IsNumber, IsOptional, IsString, Min} from "class-validator";
+import {IsEnum, IsMongoId, IsNumber, IsOptional, Min} from "class-validator";
 import {Type} from "class-transformer";
 
-/**
- * DTO dùng nội bộ khi gateway tạo call message.
- * Không expose ra HTTP endpoint — chỉ dùng qua MessageService.createCallMessage().
- */
+// dùng nội bộ khi gateway tạo tin nhắn cuộc gọi
 export class CreateCallMessageDto {
     @IsMongoId()
     conversationId!: string;
 
-    /** userId của người gọi (callerId) */
+    // người gọi
     @IsMongoId()
     callerId!: string;
 
-    @IsEnum(["voice", "video"])
-    callType!: "voice" | "video";
+    @IsEnum(["voice"])
+    callType!: "voice";
 
     @IsEnum(["missed", "cancelled", "ended", "started"])
     status!: "missed" | "cancelled" | "ended" | "started";
 
-    /** Thời lượng cuộc gọi (giây) — chỉ set khi status = "ended" */
+    // thời lượng (giây), chỉ có khi status = "ended"
     @IsOptional()
     @IsNumber()
     @Min(0)
     @Type(() => Number)
     duration?: number;
 
-    /** Thời điểm callee bắt máy — chỉ set khi status = "ended" */
+    // lúc bắt máy
     @IsOptional()
     startedAt?: Date;
 
-    /** Thời điểm kết thúc cuộc gọi */
+    // lúc kết thúc
     @IsOptional()
     endedAt?: Date;
 
-    /** Tất cả userId đã tham gia (caller + callee, hoặc group participants) */
+    // tất cả userId đã tham gia
     @IsOptional()
     @IsMongoId({each: true})
     participantIds?: string[];

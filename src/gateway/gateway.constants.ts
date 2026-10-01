@@ -19,7 +19,6 @@ export const SOCKET_EVENTS = {
     MESSAGE_UNPINNED: "message_unpinned",
     MESSAGE_MENTION: "mention_received",
     MESSAGE_SYSTEM_ROOM: "message_system_room",
-    ANNOUNCEMENT_CREATED: "announcement_created",
 
     GROUP_UPDATED: "conversation_updated",
     GROUP_CREATED: "group_created",
@@ -41,7 +40,7 @@ export const SOCKET_EVENTS = {
     FRIEND_REQUEST_REJECTED: "friend_request_rejected",
 
     CALL_INITIATED: "call_initiated",
-    CALL_STARTED: "call_started",  // Emit callId về caller sau khi tạo
+    CALL_STARTED: "call_started",
     CALL_BUSY: "call_busy",
     CALL_ACCEPTED: "call_accepted",
     CALL_REJECTED: "call_rejected",

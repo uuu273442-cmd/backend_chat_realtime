@@ -76,8 +76,4 @@ export class MessageEmitService {
     messageSystemRoom(conversationId: string, payload: any) {
         this.toConversation(conversationId).emit(SOCKET_EVENTS.MESSAGE_SYSTEM_ROOM, payload);
     }
-
-    announcementCreated(conversationId: string, payload: any) {
-        this.toConversation(conversationId).emit(SOCKET_EVENTS.ANNOUNCEMENT_CREATED, payload);
-    }
 }

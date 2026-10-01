@@ -28,8 +28,7 @@ export class UserService {
     ) {
     }
 
-    // Danh sách người dùng chỉ trả về thông tin công khai.
-    // Trước đây trả toàn bộ document nên lộ mật khẩu đã băm và refresh token.
+    // chỉ trả về thông tin công khai
     public async users() {
         return this.userModel
             .find({}, {name: 1, avatar: 1, status: 1})
@@ -46,7 +45,7 @@ export class UserService {
         return this.userModel.findById(convertStringToObjectId(userId)).lean();
     }
 
-    // Chỉ cần biết có tồn tại hay không nên dùng exists, không tải cả document
+    // chỉ cần biết có tồn tại nên dùng exists
     public async existsById(userId: string) {
         return !!(await this.userModel.exists({_id: convertStringToObjectId(userId)}));
     }
@@ -102,7 +101,7 @@ export class UserService {
             }
         );
         if (!user) {
-            throw new NotFoundException("User not found");
+            throw new NotFoundException("Không tìm thấy người dùng");
         }
         return user;
     }
@@ -133,9 +132,9 @@ export class UserService {
     }
 
     public async blockUser(myUserId: string, userId: string) {
-        if (myUserId === userId) throw new BadRequestException("Can't block yourself");
+        if (myUserId === userId) throw new BadRequestException("Không thể tự chặn chính mình");
         const checkExitsUser = await this.findById(userId);
-        if (!checkExitsUser) throw new NotFoundException("User not found");
+        if (!checkExitsUser) throw new NotFoundException("Không tìm thấy người dùng");
         await this.blockUserModel.findOneAndUpdate(
             {blockerId: convertStringToObjectId(myUserId), blockedId: convertStringToObjectId(userId)},
             {},
@@ -145,9 +144,9 @@ export class UserService {
     }
 
     public async unblockUser(myUserId: string, userId: string) {
-        if (myUserId === userId) throw new BadRequestException("Can't unblock yourself");
+        if (myUserId === userId) throw new BadRequestException("Không thể tự bỏ chặn chính mình");
         const checkExitsUser = await this.findById(userId);
-        if (!checkExitsUser) throw new NotFoundException("User not found");
+        if (!checkExitsUser) throw new NotFoundException("Không tìm thấy người dùng");
         await this.blockUserModel.deleteOne({
             blockerId: convertStringToObjectId(myUserId),
             blockedId: convertStringToObjectId(userId),
@@ -163,7 +162,7 @@ export class UserService {
             .lean();
     }
 
-    // Hai người có chặn nhau (theo bất kỳ chiều nào) hay không
+    // hai người có chặn nhau (theo chiều nào cũng tính) hay không
     public async isBlocked(myUserId: string, userId: string) {
         const objMyId = convertStringToObjectId(myUserId);
         const objUserId = convertStringToObjectId(userId);
@@ -186,7 +185,7 @@ export class UserService {
             },
             { new: true, select: "status customStatusMessage lastSeen" }
         );
-        if (!updated) throw new NotFoundException("User not found");
+        if (!updated) throw new NotFoundException("Không tìm thấy người dùng");
         this.chatGateway.emitStatusChanged(
             userId,
             updated.status,
@@ -209,7 +208,7 @@ export class UserService {
             {$set: updateFields},
             {new: true, select: "privacy"},
         );
-        if (!updated) throw new NotFoundException("User not found");
+        if (!updated) throw new NotFoundException("Không tìm thấy người dùng");
 
         return updated;
     }
@@ -219,7 +218,7 @@ export class UserService {
             convertStringToObjectId(userId),
             {privacy: 1}
         ).lean();
-        if (!findPrivacy) throw new NotFoundException("User not found");
+        if (!findPrivacy) throw new NotFoundException("Không tìm thấy người dùng");
         return findPrivacy;
     }
 
@@ -229,10 +228,9 @@ export class UserService {
             convertStringToObjectId(targetUserId),
             {password: 0, refreshToken: 0}
         ).lean();
-        if (!user) throw new NotFoundException("User not found");
+        if (!user) throw new NotFoundException("Không tìm thấy người dùng");
 
-        // Chỉ ẩn phoneNumber khi xem profile NGƯỜI KHÁC — xem chính mình
-        // (vd: mở Settings) vẫn cần thấy số điện thoại để có thể sửa
+        // ẩn số điện thoại khi xem người khác, xem chính mình thì vẫn hiện
         if (!isSelf) delete (user as any).phoneNumber;
 
         const visibility = user.privacy.lastSeenVisibility;
@@ -252,7 +250,7 @@ export class UserService {
         const user = await this.userModel.findOne({
             phoneNumber: context
         });
-        if (!user) throw new NotFoundException("User not found!");
+        if (!user) throw new NotFoundException("Không tìm thấy người dùng");
         return user
     }
 
@@ -270,13 +268,10 @@ export class UserService {
     public async updateProfile(userId: string, dto: updateProfileDto, file?: Express.Multer.File) {
         const upload: any = {};
         if (file)
-            // uploadAvatarProfile giờ trả về URL string trực tiếp (đã fix bug
-            // cũ trả về cả Attachment document + sai type: "voice")
+            // uploadAvatarProfile trả về url dạng chuỗi
             upload.avatar = await this.attachmentService.uploadAvatarProfile(file, userId);
         if (dto.email) upload.email = dto.email;
         if (dto.name) upload.name = dto.name;
-        // Fix bug cũ: gán nhầm dto.name + sai tên field (schema là phoneNumber,
-        // không phải phone) khiến số điện thoại không bao giờ được cập nhật
         if (dto.phone) upload.phoneNumber = dto.phone;
         if (dto.bio !== undefined) upload.bio = dto.bio;
 
@@ -285,7 +280,7 @@ export class UserService {
             upload,
             {new: true}
         );
-        if (!updated) throw new ForbiddenException("Data can't be updated!");
+        if (!updated) throw new ForbiddenException("Không thể cập nhật dữ liệu");
         return updated;
     }
 }

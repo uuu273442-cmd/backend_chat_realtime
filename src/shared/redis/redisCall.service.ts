@@ -2,16 +2,11 @@ import {Inject, Injectable} from "@nestjs/common";
 import Redis from "ioredis";
 import {REDIS_CLIENT} from "./redis.module";
 
-/**
- * RedisCallService — quản lý trạng thái cuộc gọi trên Redis thay vì in-memory Map.
- *
- * Schema Redis:
- *   call:{callId}            → Hash  { callId, callerId, calleeId?, conversationId?, callType, isGroup }
- *   call:{callId}:members    → Set   { userId, userId, ... }
- *   user:{userId}:callId     → String callId   (TTL = 2h)
- *
- * TTL 2 giờ tự xoá call bị abandon (client crash không emit call_end).
- */
+// lưu trạng thái cuộc gọi trên redis
+//   call:{callId}          hash  thông tin cuộc gọi
+//   call:{callId}:members  set   userId đang tham gia
+//   user:{userId}:callId   string callId mà user đang ở trong
+// ttl 2 giờ để tự xoá cuộc gọi bị bỏ dở (client crash)
 @Injectable()
 export class RedisCallService {
     private readonly CALL_TTL = 7200;
@@ -26,11 +21,11 @@ export class RedisCallService {
         callerId: string;
         calleeId?: string;
         conversationId?: string;
-        callType: "voice" | "video";
+        callType: "voice";
         isGroup: boolean;
     }): Promise<void> {
-        const key = `call:${data.callId}`; // key redis giống với hashMap
-        const pipeline = this.redis.pipeline(); // tạo hộp để chứa các lệnh -> gửi luôn một lần khỏi cần mỗi câu lệnh dùng await -> lâu
+        const key = `call:${data.callId}`;
+        const pipeline = this.redis.pipeline();
 
         pipeline.hset(key, {
             callId: data.callId,
@@ -39,15 +34,15 @@ export class RedisCallService {
             conversationId: data.conversationId ?? "",
             callType: data.callType,
             isGroup: data.isGroup ? "1" : "0",
-            startedAt: "",  // set khi callee accept
+            startedAt: "",
         });
         pipeline.expire(key, this.CALL_TTL);
 
-        // Thêm caller vào members set
+        // thêm người gọi vào danh sách
         pipeline.sadd(`call:${data.callId}:members`, data.callerId);
         pipeline.expire(`call:${data.callId}:members`, this.CALL_TTL);
 
-        // Map user → callId (tác dụng kiểm tra xem user có đang bận trong cuộc hợp nào không?)
+        // đánh dấu user đang bận
         pipeline.set(`user:${data.callerId}:callId`, data.callId, "EX", this.CALL_TTL);
 
         await pipeline.exec();
@@ -58,7 +53,7 @@ export class RedisCallService {
         callerId: string;
         calleeId?: string;
         conversationId?: string;
-        callType: "voice" | "video";
+        callType: "voice";
         isGroup: boolean;
         participants: Set<string>;
         startedAt?: Date;
@@ -75,42 +70,39 @@ export class RedisCallService {
             callerId: raw.callerId,
             calleeId: raw.calleeId || undefined,
             conversationId: raw.conversationId || undefined,
-            callType: raw.callType as "voice" | "video",
+            callType: "voice",
             isGroup: raw.isGroup === "1",
             participants: new Set(members),
             startedAt: raw.startedAt ? new Date(raw.startedAt) : undefined,
         };
     }
 
-    // ─── Set thời điểm bắt đầu (khi callee accept) ──────────────────────────
+    // lưu thời điểm bắt máy
 
     async setStartedAt(callId: string): Promise<void> {
         await this.redis.hset(`call:${callId}`, "startedAt", new Date().toISOString());
     }
 
-    // ─── Thêm participant ─────────────────────────────────────────────────────
- 
+    // thêm người tham gia
     async addParticipant(callId: string, userId: string): Promise<void> {
         const pipeline = this.redis.pipeline();
-        pipeline.sadd(`call:${callId}:members`, userId); // thêm thành viên mới.
-        pipeline.expire(`call:${callId}:members`, this.CALL_TTL); // tự động giải phóng dữ liệu, rác, ..., tránh tồn dữ liệu đã sử dụng hoặc không mong muốn.
-        pipeline.set(`user:${userId}:callId`, callId, "EX", this.CALL_TTL); // set biết user đang ở phòng nào.
+        pipeline.sadd(`call:${callId}:members`, userId);
+        pipeline.expire(`call:${callId}:members`, this.CALL_TTL);
+        pipeline.set(`user:${userId}:callId`, callId, "EX", this.CALL_TTL);
         await pipeline.exec();
     }
 
-    // ─── Xoá participant ──────────────────────────────────────────────────────
- 
+    // xoá người tham gia
     async removeParticipant(callId: string, userId: string): Promise<number> {
         const pipeline = this.redis.pipeline();
         pipeline.srem(`call:${callId}:members`, userId);
         pipeline.del(`user:${userId}:callId`);
         await pipeline.exec();
-        // Trả về số member còn lại sau khi xoá
+        // trả về số người còn lại
         return await this.redis.scard(`call:${callId}:members`);
     }
 
-    // ─── Xoá toàn bộ call ────────────────────────────────────────────────────
- 
+    // xoá toàn bộ cuộc gọi
     async deleteCall(callId: string, participantIds: string[]): Promise<void> {
         const pipeline = this.redis.pipeline();
         pipeline.del(`call:${callId}`);
@@ -121,8 +113,7 @@ export class RedisCallService {
         await pipeline.exec();
     }
 
-    // ─── Kiểm tra user có đang trong call không ───────────────────────────────
- 
+    // kiểm tra user có đang trong cuộc gọi không
     async getUserCallId(userId: string): Promise<string | null> {
         return this.redis.get(`user:${userId}:callId`);
     }
@@ -131,8 +122,12 @@ export class RedisCallService {
         return !!(await this.redis.exists(`user:${userId}:callId`));
     }
 
-    // ─── Lấy danh sách participants ───────────────────────────────────────────
- 
+    // user có nằm trong cuộc gọi này không
+    async isParticipant(callId: string, userId: string): Promise<boolean> {
+        return (await this.redis.sismember(`call:${callId}:members`, userId)) === 1;
+    }
+
+    // lấy danh sách người tham gia
     async getParticipants(callId: string): Promise<string[]> {
         return this.redis.smembers(`call:${callId}:members`);
     }
@@ -141,9 +136,7 @@ export class RedisCallService {
         return this.redis.scard(`call:${callId}:members`);
     }
 
-    // ─── Active group call theo conversation ────────────────────────────────
-    // Tránh tạo call mới khi conversation đã có call đang diễn ra (fix duplicate
-    // call/message khi user rejoin hoặc bấm gọi trong lúc nhóm đang gọi)
+    // cuộc gọi nhóm đang chạy của mỗi hội thoại (tránh tạo trùng)
 
     async setActiveGroupCall(conversationId: string, callId: string): Promise<void> {
         await this.redis.set(

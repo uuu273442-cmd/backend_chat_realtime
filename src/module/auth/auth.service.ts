@@ -19,21 +19,21 @@ export class AuthService {
     }
 
     public async register(dto: InputRegisterUserDto) {
-        // Kiểm tra mật khẩu trước vì không cần truy vấn database
+        // kiểm tra mật khẩu trước vì không cần truy vấn database
         if (dto.password !== dto.passwordConfirm) {
-            throw new ConflictException("Passwords do not match");
+            throw new ConflictException("Mật khẩu xác nhận không khớp");
         }
 
-        // Hai truy vấn độc lập nên chạy song song để nhanh hơn
+        // chạy song song cho nhanh
         const [existEmail, existPhoneNumber] = await Promise.all([
             this.userService.findByEmail(dto.email),
             this.userService.findByPhoneNumber(dto.phoneNumber),
         ]);
         if (existEmail) {
-            throw new ConflictException("Email already exists");
+            throw new ConflictException("Email đã được sử dụng");
         }
         if (existPhoneNumber) {
-            throw new ConflictException("Phone number already exists");
+            throw new ConflictException("Số điện thoại đã được sử dụng");
         }
 
         const data: registerDto = {
@@ -53,7 +53,7 @@ export class AuthService {
         return user;
     }
 
-    // Tạo access token (15 phút) và refresh token (7 ngày).
+    // tạo access token (15 phút) và refresh token (7 ngày)
     private createTokens(user: {_id: any; name: string; avatar?: string | null; email: string}) {
         const payload = {
             sub: user._id.toString(),
@@ -70,16 +70,12 @@ export class AuthService {
         return {payload, accessToken, refreshToken};
     }
 
-    // Refresh token được băm bằng SHA-256 trước khi lưu vào database.
-    // Không dùng bcrypt vì bcrypt chỉ đọc 72 ký tự đầu, phần đầu của mọi JWT
-    // cùng một người dùng giống nhau nên các token khác nhau bị coi là trùng.
+    // băm refresh token bằng sha-256 (bcrypt chỉ đọc 72 ký tự đầu nên các jwt bị coi là trùng)
     private hashRefreshToken(token: string): string {
         return createHash("sha256").update(token).digest("hex");
     }
 
-    // So sánh refresh token gửi lên với giá trị đã lưu.
-    // Giá trị bcrypt cũ (bắt đầu bằng "$2") vẫn được chấp nhận một lần
-    // và sẽ được thay bằng SHA-256 khi token được làm mới.
+    // so sánh refresh token, vẫn nhận giá trị bcrypt cũ ("$2") rồi đổi sang sha-256
     private async isRefreshTokenValid(token: string, stored: string): Promise<boolean> {
         if (stored.startsWith("$2")) {
             return bcrypt.compare(token, stored);
@@ -93,7 +89,7 @@ export class AuthService {
         const {payload, accessToken, refreshToken} = this.createTokens(user);
         await this.userService.updateRefreshToken(payload.sub, this.hashRefreshToken(refreshToken));
 
-        // Không trả mật khẩu đã băm về cho client
+        // không trả mật khẩu về client
         const {password: _password, ...safeUser} = user as any;
         return {
             accessToken,
@@ -110,15 +106,15 @@ export class AuthService {
 
             const user = await this.userService.findById(payload.sub);
             if (!user || !user.refreshToken) {
-                throw new UnauthorizedException();
+                throw new UnauthorizedException("Phiên đăng nhập không hợp lệ");
             }
 
             const isValid = await this.isRefreshTokenValid(refreshToken, user.refreshToken);
             if (!isValid) {
-                throw new UnauthorizedException("Refresh token reused or invalid");
+                throw new UnauthorizedException("Refresh token đã bị dùng lại hoặc không hợp lệ");
             }
 
-            // Mỗi lần làm mới sẽ cấp cặp token mới và thu hồi token cũ
+            // mỗi lần làm mới cấp token mới và thu hồi token cũ
             const tokens = this.createTokens(user);
             await this.userService.updateRefreshToken(
                 tokens.payload.sub,
@@ -129,7 +125,7 @@ export class AuthService {
                 refreshToken: tokens.refreshToken,
             };
         } catch {
-            throw new UnauthorizedException("Invalid refresh token");
+            throw new UnauthorizedException("Refresh token không hợp lệ");
         }
     }
 

@@ -2,38 +2,22 @@ import {Inject, Injectable, Logger} from "@nestjs/common";
 import Redis from "ioredis";
 import {REDIS_CLIENT} from "./redis.module";
 
-/**
- * RedisCacheService — cache cho conversation list và message pagination.
- *
- * ── Conversation cache ────────────────────────────────────────────────────────
- * Key:  conversations:{userId}:{active|archived}
- * TTL:  30 giây
- * Invalidate: khi có message mới, join/leave group, mark seen, v.v.
- *
- * ── Message page cache ────────────────────────────────────────────────────────
- * Key:  messages:{conversationId}:page:{cursor}:{limit}
- *         cursor = "first" (trang đầu, không có before) hoặc ObjectId của before
- * TTL:  60 giây
- * Invalidate: khi có message mới, edit, delete, react/unreact trong conversation đó.
- *
- * Lưu ý: Chỉ cache GET messages (read). Write operations luôn đi thẳng MongoDB.
- */
+// cache danh sách hội thoại (30s) và các trang tin nhắn (60s) trên redis
+// chỉ cache dữ liệu đọc, ghi vẫn đi thẳng vào mongodb
 
 @Injectable()
 export class RedisCacheService {
     private readonly logger = new Logger(RedisCacheService.name);
  
-    private readonly CONVERSATIONS_TTL = 30;   // 30 giây
-    private readonly MESSAGES_TTL = 60;   // 60 giây
+    private readonly CONVERSATIONS_TTL = 30;
+    private readonly MESSAGES_TTL = 60;
 
     constructor(
         @Inject(REDIS_CLIENT) private readonly redis: Redis
     ) {
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // CONVERSATION LIST CACHE
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ─── cache danh sách hội thoại ───
  
     private conversationKey(userId: string, archived: boolean): string {
         return `conversations:${userId}:${archived ? "archived" : "active"}`;
@@ -45,7 +29,7 @@ export class RedisCacheService {
             if (!cached) return null;
             return JSON.parse(cached);
         } catch (err) {
-            this.logger.warn(`[Cache] getConversations error: ${err}`);
+            this.logger.warn(`[Cache] lỗi lấy danh sách hội thoại: ${err}`);
             return null;
         }
     }
@@ -58,11 +42,11 @@ export class RedisCacheService {
                 JSON.stringify(data),
             );
         } catch (err) {
-            this.logger.warn(`[Cache] setConversations error: ${err}`);
+            this.logger.warn(`[Cache] lỗi lưu danh sách hội thoại: ${err}`);
         }
     }
  
-    /** Invalidate cả active lẫn archived cache của một user */
+    // xoá cache hội thoại của 1 user
     async invalidateConversations(userId: string): Promise<void> {
         try {
             const pipeline = this.redis.pipeline();
@@ -70,11 +54,11 @@ export class RedisCacheService {
             pipeline.del(this.conversationKey(userId, true));
             await pipeline.exec();
         } catch (err) {
-            this.logger.warn(`[Cache] invalidateConversations error: ${err}`);
+            this.logger.warn(`[Cache] lỗi xoá cache hội thoại: ${err}`);
         }
     }
  
-    /** Invalidate cache của nhiều users cùng lúc (vd: tất cả participants khi có message mới) */
+    // xoá cache hội thoại của nhiều user
     async invalidateConversationsMany(userIds: string[]): Promise<void> {
         if (!userIds.length) return;
         try {
@@ -85,19 +69,13 @@ export class RedisCacheService {
             }
             await pipeline.exec();
         } catch (err) {
-            this.logger.warn(`[Cache] invalidateConversationsMany error: ${err}`);
+            this.logger.warn(`[Cache] lỗi xoá cache nhiều hội thoại: ${err}`);
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // MESSAGE PAGE CACHE
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ─── cache trang tin nhắn ───
  
-    /**
-     * Tạo cache key cho một page messages.
-     * cursor = "first" khi không có before (trang đầu tiên).
-     * cursor = before ObjectId khi load thêm (infinite scroll).
-     */
+    // tạo key cache cho 1 trang tin nhắn
     private messagePageKey(
         conversationId: string,
         cursor: string,
@@ -106,10 +84,7 @@ export class RedisCacheService {
         return `messages:${conversationId}:page:${cursor}:${limit}`;
     }
  
-    /**
-     * Lấy một page messages từ cache.
-     * Trả về null nếu không có (cache miss).
-     */
+    // lấy 1 trang tin nhắn từ cache, null nếu chưa có
     async getMessages(
         conversationId: string,
         limit: number,
@@ -120,19 +95,15 @@ export class RedisCacheService {
             const key = this.messagePageKey(conversationId, cursor, limit);
             const cached = await this.redis.get(key);
             if (!cached) return null;
-            this.logger.debug(`[Cache] HIT messages ${conversationId} cursor=${cursor}`);
+            this.logger.debug(`[Cache] có cache tin nhắn ${conversationId} cursor=${cursor}`);
             return JSON.parse(cached);
         } catch (err) {
-            this.logger.warn(`[Cache] getMessages error: ${err}`);
+            this.logger.warn(`[Cache] lỗi lấy tin nhắn: ${err}`);
             return null;
         }
     }
  
-    /**
-     * Lưu một page messages vào cache.
-     * Đồng thời đăng ký key vào set theo dõi của conversation
-     * để có thể invalidate tất cả pages khi cần.
-     */
+    // lưu 1 trang tin nhắn vào cache
     async setMessages(
         conversationId: string,
         limit: number,
@@ -145,28 +116,19 @@ export class RedisCacheService {
             const trackingKey = `messages:${conversationId}:keys`;
  
             const pipeline = this.redis.pipeline();
-            // Lưu page data
+            // lưu dữ liệu trang
             pipeline.setex(key, this.MESSAGES_TTL, JSON.stringify(data));
-            // Đăng ký key vào tracking set (để invalidate sau)
+            // lưu key để xoá sau này
             pipeline.sadd(trackingKey, key);
-            // Tracking set có TTL dài hơn một chút để không bị xoá trước các pages
+            // set theo dõi sống lâu hơn các trang một chút
             pipeline.expire(trackingKey, this.MESSAGES_TTL + 60);
             await pipeline.exec();
         } catch (err) {
-            this.logger.warn(`[Cache] setMessages error: ${err}`);
+            this.logger.warn(`[Cache] lỗi lưu tin nhắn: ${err}`);
         }
     }
  
-    /**
-     * Invalidate TẤT CẢ cached pages của một conversation.
-     *
-     * Gọi khi:
-     * - Có message mới gửi vào conversation
-     * - Message bị edit (nội dung thay đổi)
-     * - Message bị delete (isDeleted = true hoặc deletedFor)
-     * - React/unreact (reactions array thay đổi)
-     * - markAsSeen (seenBy array thay đổi)
-     */
+    // xoá toàn bộ cache tin nhắn của 1 hội thoại
     async invalidateMessages(conversationId: string): Promise<void> {
         try {
             const trackingKey = `messages:${conversationId}:keys`;
@@ -174,11 +136,11 @@ export class RedisCacheService {
  
             if (keys.length > 0) {
                 const pipeline = this.redis.pipeline();
-                // Xoá tất cả page keys đã đăng ký
+                // xoá tất cả key đã lưu
                 for (const k of keys) {
                     pipeline.del(k);
                 }
-                // Xoá tracking set
+                // xoá set theo dõi
                 pipeline.del(trackingKey);
                 await pipeline.exec();
                 this.logger.debug(
@@ -186,7 +148,7 @@ export class RedisCacheService {
                 );
             }
         } catch (err) {
-            this.logger.warn(`[Cache] invalidateMessages error: ${err}`);
+            this.logger.warn(`[Cache] lỗi xoá cache tin nhắn: ${err}`);
         }
     }
 }

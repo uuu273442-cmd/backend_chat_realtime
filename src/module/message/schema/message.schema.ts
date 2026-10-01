@@ -78,13 +78,14 @@ export class Message {
 
     @Prop({
         type: {
+            // "video" chỉ để đọc tin nhắn cũ, cuộc gọi mới luôn là "voice"
             callType: {type: String, enum: ["voice", "video"], required: true},
             status: {
                 type: String,
                 enum: ["missed", "cancelled", "ended", "started"],
                 required: true,
             },
-            duration: {type: Number, default: null},   // giây
+            duration: {type: Number, default: null},
             startedAt: {type: Date, default: null},
             endedAt: {type: Date, default: null},
             participants: {
@@ -113,9 +114,8 @@ MessageSchema.index({conversationId: 1, seenBy: 1});
 MessageSchema.index({"reactions.userId": 1});
 MessageSchema.index({content: "text"});
 
-// nhưng trước đây không có index, gây full collection scan với conversation có hàng nghìn messages.
-// Index này phục vụ tốt cho getUnreadCountsPerConversation aggregation và messages() pagination.
+// index cho phân trang và đếm tin chưa đọc
 MessageSchema.index({conversationId: 1, isDeleted: 1, createdAt: -1});
 
-// [NEW] Index cho type = "call" — dùng khi query lịch sử cuộc gọi
+// index cho lịch sử cuộc gọi
 MessageSchema.index({conversationId: 1, type: 1, createdAt: -1});

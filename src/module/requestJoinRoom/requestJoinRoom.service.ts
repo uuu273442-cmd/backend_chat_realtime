@@ -61,10 +61,10 @@ export class RequestJoinRoomService {
             .findById(convertStringToObjectId(id));
 
         if (!request) {
-            throw new ForbiddenException("not found request!");
+            throw new ForbiddenException("Không tìm thấy yêu cầu tham gia");
         }
         if (request.status !== "pending") {
-            throw new ForbiddenException("Request already handled!")
+            throw new ForbiddenException("Yêu cầu đã được xử lý")
         }
         const userId = request.userId.toString();
 

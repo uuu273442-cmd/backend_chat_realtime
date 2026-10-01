@@ -1,5 +1,4 @@
-// Danh sách domain frontend được phép gọi API và socket.
-// Cấu hình trong biến môi trường URL_FE_CONNECT, nhiều domain cách nhau bằng dấu phẩy.
+// danh sách domain frontend được gọi api và socket (biến URL_FE_CONNECT, cách nhau bằng dấu phẩy)
 export const getAllowedOrigins = (): string[] | "*" => {
     const raw = process.env.URL_FE_CONNECT;
     if (!raw) return "*";

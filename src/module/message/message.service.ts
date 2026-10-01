@@ -52,32 +52,26 @@ export class MessageService {
             convertStringToObjectId(replyTo),
             {_id: 1}
         );
-        if (!message) throw new NotFoundException("Reply message not found");
+        if (!message) throw new NotFoundException("Không tìm thấy tin nhắn được trả lời");
         return convertStringToObjectId(replyTo);
     }
 
-    /**
-     * Invalidate toàn bộ cache liên quan đến conversation:
-     * - Message pages của conversation
-     * - Conversation list của tất cả participants
-     *
-     * Tất cả lỗi cache đều bị nuốt — không để ảnh hưởng flow chính.
-     */
+    // xoá cache tin nhắn và danh sách hội thoại của mọi thành viên (lỗi cache bỏ qua)
     private async invalidateAll(conversationId: string): Promise<void> {
         try {
-            // 1. Xoá tất cả message pages của conversation này
+            // xoá các trang tin nhắn
             await this.redisCacheService.invalidateMessages(conversationId);
  
-            // 2. Xoá conversation list cache của tất cả participants
+            // xoá danh sách hội thoại của thành viên
             const conversation = await this.conversationService.findConversation(conversationId);
             const participantIds = conversation.participants.map((p) => p.userId.toString());
             await this.redisCacheService.invalidateConversationsMany(participantIds);
         } catch {
-            // Không để lỗi cache làm hỏng flow chính
+            // lỗi cache không ảnh hưởng luồng chính
         }
     }
  
-    // ─── Gửi message text ────────────────────────────────────────────────────
+    // ─── gửi tin nhắn ───
 
     private getArrayPopulate() {
         return [
@@ -146,20 +140,9 @@ export class MessageService {
         return {message};
     }
 
-    // ─── CALL MESSAGE ────────────────────────────────────────────────────────
+    // ─── tin nhắn cuộc gọi ───
  
-    /**
-     * Tạo message loại "call" để lưu lịch sử cuộc gọi vào conversation.
-     *
-     * Được gọi từ ChatGateway tại các thời điểm:
-     *   - call_end      → status "ended",     có duration
-     *   - call_reject   → status "missed"
-     *   - call_cancel   → status "cancelled"
-     *   - handleDisconnect (crash) → status "ended" nếu đang call, "missed" nếu chưa bắt máy
-     *
-     * Sau khi lưu, emit socket event "new_message_call" đến tất cả members của conversation
-     * để frontend hiển thị message trong chat list ngay lập tức.
-     */
+    // tạo tin nhắn loại "call" để lưu lịch sử cuộc gọi vào hội thoại
     public async createCallMessage(dto: CreateCallMessageDto): Promise<MessageDocument> {
         const {
             conversationId,
@@ -175,17 +158,18 @@ export class MessageService {
         const convObjectId = convertStringToObjectId(conversationId);
         const senderObjectId = convertStringToObjectId(callerId);
  
-        // Tất cả participants đều đã seen message này (họ đã tham gia cuộc gọi)
+        // người trong cuộc gọi coi như đã xem tin nhắn này
         const seenByIds = participantIds.map((id) => convertStringToObjectId(id));
         if (!seenByIds.some((id) => id.equals(senderObjectId))) {
             seenByIds.push(senderObjectId);
         }
  
-        // Tạo content hiển thị dựa trên status
+        // nội dung hiển thị theo trạng thái
         const contentMap: Record<string, string> = {
-            ended: callType === "video" ? "Cuộc gọi video" : "Cuộc gọi thoại",
-            missed: callType === "video" ? "Cuộc gọi video nhỡ" : "Cuộc gọi thoại nhỡ",
-            cancelled: callType === "video" ? "Cuộc gọi video đã huỷ" : "Cuộc gọi thoại đã huỷ",
+            started: "Cuộc gọi thoại nhóm",
+            ended: "Cuộc gọi thoại",
+            missed: "Cuộc gọi thoại nhỡ",
+            cancelled: "Cuộc gọi thoại đã huỷ",
         };
  
         const message = await this.messageModel.create({
@@ -204,25 +188,25 @@ export class MessageService {
             },
         });
  
-        // Populate senderId để frontend có name/avatar
+        // lấy tên và avatar cho frontend
         await message.populate([
             {path: "senderId", select: "name avatar"},
             {path: "callInfo.participants", select: "name avatar"},
         ]);
  
-        // Cập nhật lastMessage của conversation
+        // cập nhật tin nhắn cuối của hội thoại
         await this.conversationService.updateConversation(conversationId, message.id);
  
-        // Emit socket event đến tất cả members đang online trong conversation
+        // báo cho thành viên đang online
         this.chatGateway.emitNewMessageCall(conversationId, message);
  
-        // Invalidate cache — conversation list cần refresh vì lastMessage thay đổi
+        // xoá cache vì tin nhắn cuối đã đổi
         await this.invalidateAll(conversationId);
  
         return message;
     }
 
-    // ─── Search ──────────────────────────────────────────────────────────────
+    // ─── tìm kiếm ───
 
     public async search(q: string, conversationId: string) {
         const conversationObjectId = convertStringToObjectId(conversationId);
@@ -243,7 +227,7 @@ export class MessageService {
         return res;
     }
 
-    // ─── Pin / Unpin ─────────────────────────────────────────────────────────
+    // ─── ghim / bỏ ghim ───
 
     public async pin(
         messageId: string,
@@ -251,8 +235,8 @@ export class MessageService {
         conversationId: string
     ) {
         const mgs = await this.messageModel.findById(convertStringToObjectId(messageId));
-        if (!mgs) throw new NotFoundException("Message not found");
-        if (mgs.isPinned) throw new ForbiddenException("Message already pinned");
+        if (!mgs) throw new NotFoundException("Không tìm thấy tin nhắn");
+        if (mgs.isPinned) throw new ForbiddenException("Tin nhắn đã được ghim");
 
         mgs.isPinned = true;
         mgs.pinByUser = convertStringToObjectId(userId);
@@ -266,7 +250,7 @@ export class MessageService {
             pinnedAt: mgs.pinnedAt.toISOString(),
         });
 
-        // [CACHE] Invalidate vì isPinned của message thay đổi
+        // xoá cache vì trạng thái ghim đổi
         await this.redisCacheService.invalidateMessages(conversationId);
         return mgs;
     }
@@ -277,10 +261,10 @@ export class MessageService {
         conversationId: string
     ) {
         const mgs = await this.messageModel.findById(convertStringToObjectId(messageId));
-        if (!mgs) throw new NotFoundException("Message not found");
-        if (!mgs.isPinned) throw new ForbiddenException("Message already not pinned");
+        if (!mgs) throw new NotFoundException("Không tìm thấy tin nhắn");
+        if (!mgs.isPinned) throw new ForbiddenException("Tin nhắn chưa được ghim");
         if (!mgs.pinByUser || mgs.pinByUser.toString() !== userId) {
-            throw new ForbiddenException("You are not user pin this message!")
+            throw new ForbiddenException("Bạn không phải người đã ghim tin nhắn này")
         }
         mgs.isPinned = false;
         mgs.pinByUser = null;
@@ -294,12 +278,12 @@ export class MessageService {
             pinnedAt: null,
         });
 
-        // [CACHE] Invalidate vì isPinned của message thay đổi
+        // xoá cache vì trạng thái ghim đổi
         await this.redisCacheService.invalidateMessages(conversationId);
         return mgs;
     }
 
-    // ─── Upload files / media / voice ────────────────────────────────────────
+    // ─── tải tệp / ảnh / giọng nói ───
 
     public async uploadFiles(
         files: Express.Multer.File[],
@@ -330,7 +314,6 @@ export class MessageService {
         this.chatGateway.emitNewMessageFiles(conversationId, {message, attachments});
         await this.conversationService.updateConversation(conversationId, message.id);
 
-        // [CACHE] Invalidate
         await this.invalidateAll(conversationId);
         return {message, attachments};
     }
@@ -360,7 +343,6 @@ export class MessageService {
         this.chatGateway.emitNewMessageMedias(conversationId, {message, attachments});
         await this.conversationService.updateConversation(conversationId, message.id);
 
-        // [CACHE] Invalidate
         await this.invalidateAll(conversationId);
         return {message, attachments};
     }
@@ -385,10 +367,7 @@ export class MessageService {
         });
         await message.populate(this.getArrayPopulate());
 
-        // attachmentService.uploadVoice() trả về 1 document đơn (không phải mảng)
-        // — bọc mảng ở đây để nhất quán với uploadFiles/uploadMedias và khớp với
-        // format FE mong đợi (msg.attachments[0]), tránh bug hiện bubble rỗng
-        // cho tới khi user refresh trang
+        // bọc thành mảng cho giống file và media
         const voiceAttachment = await this.attachmentService.uploadVoice(
             file, message.id, userId, conversationId
         );
@@ -397,12 +376,11 @@ export class MessageService {
         this.chatGateway.emitNewMessageVoice(conversationId, {message, attachments});
         await this.conversationService.updateConversation(conversationId, message.id);
 
-        // [CACHE] Invalidate
         await this.invalidateAll(conversationId);
         return {message, attachments};
     }
 
-    // ─── Edit ────────────────────────────────────────────────────────────────
+    // ─── sửa ───
 
     public async edit(
         userId: string,
@@ -410,9 +388,9 @@ export class MessageService {
         id: string
     ) {
         const message = await this.messageModel.findById(convertStringToObjectId(id));
-        if (!message) throw new NotFoundException("Message not found");
+        if (!message) throw new NotFoundException("Không tìm thấy tin nhắn");
         if (message.senderId.toString() !== userId) {
-            throw new ForbiddenException("Can't edit message");
+            throw new ForbiddenException("Không thể sửa tin nhắn này");
         }
 
         message.content = content;
@@ -434,23 +412,23 @@ export class MessageService {
 
         this.chatGateway.emitMessageEdited(message.conversationId.toString(), populated);
 
-        // [CACHE] Invalidate vì nội dung message đã thay đổi
+        // xoá cache vì nội dung đổi
         await this.redisCacheService.invalidateMessages(message.conversationId.toString());
         return populated;
     }
 
-    // ─── GET messages — CACHE-ASIDE ──────────────────────────────────────────
+    // ─── lấy tin nhắn (có cache) ───
 
     public async messages(
         conversationId: string,
         limit: number = 20,
         before?: string
     ) {
-        // 1. Thử lấy từ cache
+        // 1. thử lấy từ cache
         const cached = await this.redisCacheService.getMessages(conversationId, limit, before);
         if (cached) return cached;
  
-        // 2. Cache miss — query MongoDB
+        // 2. chưa có cache thì truy vấn mongodb
         const query: any = {conversationId: convertStringToObjectId(conversationId)};
         if (before) query._id = {$lt: convertStringToObjectId(before)};
         const messages = await this.messageModel
@@ -464,7 +442,7 @@ export class MessageService {
                 },
                 {path: "deletedFor", select: "name avatar"},
                 {path: "seenBy", select: "name avatar"},
-                 // [NEW] Populate participants của callInfo
+                 // lấy thông tin người tham gia cuộc gọi
                 {path: "callInfo.participants", select: "name avatar"},
             ])
             .sort({createdAt: -1})
@@ -490,7 +468,7 @@ export class MessageService {
         const enriched = messages.map(m => {
             const id = m._id.toString();
             
-            // Attachments: ưu tiên theo m._id, fallback về forwardedFrom
+            // tệp đính kèm: ưu tiên của tin nhắn, không có thì lấy từ tin gốc
             const attachmentSource =
                 groupAttachments[id] ??
                 (m.forwardedFrom
@@ -512,12 +490,12 @@ export class MessageService {
             hasMore: enriched.length === limit,
         };
  
-        // 3. Lưu vào cache 60 giây
+        // 3. lưu vào cache
         await this.redisCacheService.setMessages(conversationId, limit, result, before);
         return result;
     }
 
-    // ─── findByIdCheck ───────────────────────────────────────────────────────
+    // ─── tìm theo id ───
 
     public async findByIdCheck(messageId: string) {
         return this.messageModel.findById(
@@ -526,7 +504,7 @@ export class MessageService {
         );
     }
 
-    // ─── React / Unreact ─────────────────────────────────────────────────────
+    // ─── thả / bỏ cảm xúc ───
 
     public async react(
         messageId: string,
@@ -549,13 +527,13 @@ export class MessageService {
         }
 
         const messageEdit = await this.messageModel.findById(messageObjectId);
-        if (!messageEdit) throw new ConflictException("message not found!");
+        if (!messageEdit) throw new ConflictException("Không tìm thấy tin nhắn");
 
         this.chatGateway.emitMessageReacted(messageEdit.conversationId.toString(), {
             messageId, userId, emoji, action: "add"
         });
 
-        // [CACHE] Invalidate vì reactions của message thay đổi
+        // xoá cache vì cảm xúc đổi
         await this.redisCacheService.invalidateMessages(
             messageEdit.conversationId.toString(),
         );
@@ -574,17 +552,17 @@ export class MessageService {
             {$pull: {reactions: {userId: userObjectId}}},
             {new: true},
         );
-        if (!message) throw new NotFoundException("Reaction not found");
+        if (!message) throw new NotFoundException("Không tìm thấy cảm xúc");
         this.chatGateway.emitMessageReacted(message.conversationId.toString(), {
             messageId, userId, emoji: null, action: "remove"
         });
 
-        // [CACHE] Invalidate vì reactions thay đổi
+        // xoá cache vì cảm xúc đổi
         await this.redisCacheService.invalidateMessages(message.conversationId.toString());
         return message;
     }
 
-    // ─── Unread counts ───────────────────────────────────────────────────────
+    // ─── đếm tin chưa đọc ───
 
     public async getUnreadCountsPerConversation(
         conversationIds: Types.ObjectId[],
@@ -603,7 +581,7 @@ export class MessageService {
         ]);
     }
 
-    // ─── Mark as seen ────────────────────────────────────────────────────────
+    // ─── đánh dấu đã xem ───
 
     public async markAsSeen(
         conversationId: string,
@@ -612,8 +590,7 @@ export class MessageService {
         const conObjectId = convertStringToObjectId(conversationId);
         const userObjectId = convertStringToObjectId(user.userId);
 
-        // Tôn trọng privacy "Hiển thị đã xem" — nếu user tắt, KHÔNG ghi
-        // seenBy và KHÔNG báo cho người khác biết mình đã đọc tin nhắn
+        // nếu người dùng tắt "hiển thị đã xem" thì không ghi seenBy và không báo ai
         const myPrivacy = await this.userService.getPrivacy(user.userId);
         if (!myPrivacy.privacy?.showReadReceipts) {
             return { success: true, hidden: true };
@@ -641,7 +618,7 @@ export class MessageService {
             },
         });
 
-        // [CACHE] seenBy thay đổi → invalidate message pages + conversation list
+        // xoá cache vì seenBy đổi
         await Promise.all([
             this.redisCacheService.invalidateMessages(conversationId),
             this.redisCacheService.invalidateConversations(user.userId),
@@ -649,7 +626,7 @@ export class MessageService {
         return { success: true };
     }
 
-    // ─── Delete ──────────────────────────────────────────────────────────────
+    // ─── xoá ───
 
     public async delete(
         conversationId: string,
@@ -678,7 +655,7 @@ export class MessageService {
             }
 
             if (!result) {
-                throw new ForbiddenException("You are not allowed to delete this message");
+                throw new ForbiddenException("Bạn không có quyền xoá tin nhắn này");
             }
             this.chatGateway.emitMessageDeleted(conversationId, {
                 messageId: result._id.toString(),
@@ -686,16 +663,16 @@ export class MessageService {
                 deletedBy: userId
             });
 
-            // [CACHE] Invalidate vì message bị xoá (isDeleted / deletedFor thay đổi)
+            // xoá cache vì tin nhắn bị xoá
             await this.redisCacheService.invalidateMessages(conversationId);
             return result;
         } catch (e) {
-            this.logger.error(`[delete] error: ${e}`);
+            this.logger.error(`[xoá tin nhắn] lỗi: ${e}`);
             throw e;
         }
     }
 
-    // ─── Forward ─────────────────────────────────────────────────────────────
+    // ─── chuyển tiếp ───
 
     public async forwardMessage(
         userId: string,
@@ -705,19 +682,19 @@ export class MessageService {
         const objectId = convertStringToObjectId(id);
         const originalMessage = await this.messageModel.findById(objectId);
 
-        if (!originalMessage) throw new NotFoundException("Message not found!");
+        if (!originalMessage) throw new NotFoundException("Không tìm thấy tin nhắn");
         if (originalMessage.isDeleted) {
-            throw new ForbiddenException("Cannot forward this message!");
+            throw new ForbiddenException("Không thể chuyển tiếp tin nhắn này");
         }
 
-        // Resolve về root message nếu đây là tin forward của forward
+        // nếu là tin chuyển tiếp của tin chuyển tiếp thì lấy về tin gốc
         const rootMessageId = originalMessage.forwardedFrom ?? originalMessage._id;
         const rootMessage =
             originalMessage.forwardedFrom
                 ? await this.messageModel.findById(rootMessageId)
                 : originalMessage;
 
-        if (!rootMessage) throw new NotFoundException("Root message not found!");
+        if (!rootMessage) throw new NotFoundException("Root Không tìm thấy tin nhắn");
 
         const userObjectId = convertStringToObjectId(userId);
 
@@ -726,10 +703,10 @@ export class MessageService {
             userId,
         );
         if (!conversations.length) {
-            throw new ForbiddenException("No active conversation found!");
+            throw new ForbiddenException("Không tìm thấy cuộc trò chuyện hợp lệ");
         }
 
-        // Lấy attachments/linkPreviews của root message 1 lần duy nhất
+        // lấy tệp đính kèm và link preview của tin gốc 1 lần
         const isMediaType = ["file", "media", "voice"].includes(rootMessage.type);
         const [rootAttachments, rootLinks] = await Promise.all([
             (isMediaType
@@ -746,7 +723,7 @@ export class MessageService {
             senderId: userObjectId,
             type: isMediaType ? rootMessage.type : "forward",
             content: rootMessage.content,
-            forwardedFrom: rootMessage._id, // luôn trỏ về root
+            forwardedFrom: rootMessage._id,  // luôn trỏ về tin gốc
             seenBy: [userObjectId],
         }));
 
@@ -754,7 +731,7 @@ export class MessageService {
 
         await Promise.all(
             messages.map(async m => {
-                // updateConversation và populate chạy song song
+                // chạy song song
                 await Promise.all([
                     this.conversationService.updateConversation(
                         m.conversationId.toString(),
@@ -766,7 +743,7 @@ export class MessageService {
                     ]),
                 ]);
 
-                // Gán attachments/linkPreviews từ root message
+                // gán tệp đính kèm và link preview từ tin gốc
                 if (isMediaType && attachments.length) {
                     (m as any).attachments =
                         m.type === "voice" ? [attachments[0]] : attachments;
@@ -787,7 +764,7 @@ export class MessageService {
         return messages;
     }
 
-    // ─── System messages ─────────────────────────────────────────────────────
+    // ─── tin nhắn hệ thống ───
 
     public async newMessageSystem(
         actorId: string,
@@ -810,7 +787,7 @@ export class MessageService {
 
         const result = await this.messageModel.insertMany(dataMap);
  
-        // [CACHE] System message cũng invalidate pages
+        // xoá cache các trang tin nhắn
         await this.redisCacheService.invalidateMessages(conversationId);
         return result;
     }
@@ -821,11 +798,11 @@ export class MessageService {
         const convObjectId = convertStringToObjectId(conversationId);
         await this.messageModel.deleteMany({conversationId: convObjectId});
         
-         // [CACHE] Xoá toàn bộ cache của conversation khi group bị xoá
+         // xoá cache khi nhóm bị xoá
         await this.redisCacheService.invalidateMessages(conversationId);
     }
 
-    // find messages pins
+    // lấy tin nhắn đã ghim
 
     public async filterMessageHavePins(conversationId: string) {
         return this.messageModel.find({

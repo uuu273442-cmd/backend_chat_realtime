@@ -19,14 +19,14 @@ export class AuthController {
     ) {
     }
 
-    // Đăng ký: tối đa 10 lần mỗi 10 phút cho mỗi IP để chặn tạo tài khoản hàng loạt
+    // đăng ký: 10 lần mỗi 10 phút
     @Throttle({default: {limit: 10, ttl: 600000}})
     @Post("register")
     public async register(@Body() body: InputRegisterUserDto) {
         return this.authService.register(body);
     }
 
-    // Đăng nhập: tối đa 20 lần mỗi phút cho mỗi IP để hạn chế dò mật khẩu
+    // đăng nhập: 20 lần mỗi phút
     @UseGuards(LocalAuthGuard)
     @Throttle({default: {limit: 20, ttl: 60000}})
     @Post("login")
@@ -34,7 +34,7 @@ export class AuthController {
         return this.authService.login(user);
     }
 
-    // Làm mới token: tối đa 30 lần mỗi phút cho mỗi IP
+    // làm mới token: 30 lần mỗi phút
     @Throttle({default: {limit: 30, ttl: 60000}})
     @Post("refresh")
     public async refresh(@Body("refreshToken") refreshToken: string) {

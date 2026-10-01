@@ -24,9 +24,7 @@ import {RedisModule} from "./shared/redis/redis.module";
         MongooseModule.forRootAsync({
             useFactory: mongooseConfig
         }),
-        // Giới hạn chung: 300 request mỗi phút cho mỗi IP.
-        // Các API đăng nhập, đăng ký có giới hạn riêng chặt hơn (xem auth.controller.ts).
-        // Giới hạn cũ (15 request mỗi 30 giây) quá thấp, chỉ mở một cuộc trò chuyện đã dùng hết.
+        // giới hạn chung 300 request mỗi phút cho mỗi ip (đăng nhập, đăng ký có giới hạn riêng)
         ThrottlerModule.forRoot([
             {
                 limit: 300,

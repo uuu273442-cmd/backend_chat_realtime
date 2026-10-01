@@ -44,7 +44,7 @@ export class CloudService {
                 duration: res.duration,
             }
         } catch (err) {
-            throw new InternalServerErrorException("Upload to Cloudinary failed");
+            throw new InternalServerErrorException("Tải tệp lên Cloudinary thất bại");
         } finally {
             fs.unlink(file.path, () => {
             });

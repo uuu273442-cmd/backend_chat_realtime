@@ -1,6 +1,6 @@
 # Realtime Chat App
 
-Ứng dụng chat thời gian thực xây dựng bằng NestJS (TypeScript), MongoDB, Redis và Socket.IO. Dự án gồm nhắn tin 1-1 và nhóm, gọi thoại/video qua WebRTC signaling, kết bạn, chặn người dùng, và cache dữ liệu bằng Redis để giảm số lần truy vấn MongoDB. Frontend dùng React + Vite + TypeScript.
+Ứng dụng chat thời gian thực xây dựng bằng NestJS (TypeScript), MongoDB, Redis và Socket.IO. Dự án gồm nhắn tin 1-1 và nhóm, gọi thoại 1-1 và gọi thoại nhóm qua WebRTC signaling, kết bạn, chặn người dùng, và cache dữ liệu bằng Redis để giảm số lần truy vấn MongoDB. Frontend dùng React + Vite + TypeScript.
 
 ---
 
@@ -22,7 +22,7 @@ Trước khi bắt tay vào code, Gemini được dùng để tìm hiểu công 
   - [Guard Pipeline cho REST API](#2-guard-pipeline-cho-rest-api)
   - [Cache dữ liệu bằng Redis (Cache-aside pattern)](#3-cache-dữ-liệu-bằng-redis-cache-aside-pattern)
   - [Gửi và nhận tin nhắn realtime](#4-gửi-và-nhận-tin-nhắn-realtime)
-  - [Cuộc gọi thoại/video qua WebRTC signaling](#5-cuộc-gọi-thoạivideo-qua-webrtc-signaling)
+  - [Cuộc gọi thoại qua WebRTC signaling](#5-cuộc-gọi-thoại-qua-webrtc-signaling)
   - [Quản lý nhóm chat](#6-quản-lý-nhóm-chat)
   - [Kết bạn & Chặn người dùng](#7-kết-bạn--chặn-người-dùng)
   - [Upload file / ảnh / voice message](#8-upload-file--ảnh--voice-message)
@@ -30,7 +30,7 @@ Trước khi bắt tay vào code, Gemini được dùng để tìm hiểu công 
 - [Socket Events Reference](#socket-events-reference)
 - [Environment Variables](#environment-variables)
 - [Getting Started](#getting-started)
-- [Cập nhật gần đây](#cập-nhật-gần-đây-tối-ưu-để-chạy-ổn-định-với-nhiều-người-dùng-hơn)
+- [Lưu ý khi triển khai](#lưu-ý-khi-triển-khai)
 
 ---
 
@@ -68,17 +68,17 @@ Trước khi bắt tay vào code, Gemini được dùng để tìm hiểu công 
 | Chat 1-1 | Tạo cuộc trò chuyện riêng giữa 2 người |
 | Nhóm chat | Tạo nhóm, thêm/xóa thành viên, đổi vai trò (owner/admin/member), rời nhóm, giải tán nhóm |
 | Yêu cầu vào nhóm | Gửi yêu cầu tham gia, admin duyệt/từ chối |
-| Thông báo nhóm (announcement) | Ghim thông báo trong nhóm |
 | Lưu trữ / Tắt thông báo | Archive cuộc trò chuyện, mute theo thời hạn tùy chọn |
 | Xem media/file/link | Xem lại toàn bộ ảnh/video, file, link đã chia sẻ trong một cuộc trò chuyện |
 
-**Gọi thoại/video**
+**Gọi thoại**
 
 | Chức năng | Mô tả |
 |---|---|
-| Gọi 1-1 | Khởi tạo, chấp nhận, từ chối, kết thúc, hủy cuộc gọi |
-| WebRTC signaling | Trao đổi offer/answer/ICE candidate qua Socket.IO để 2 client kết nối trực tiếp (peer-to-peer) |
-| Gọi nhóm | Bắt đầu, tham gia, rời, kết thúc cuộc gọi nhóm; theo dõi danh sách người đang trong cuộc gọi |
+| Gọi 1-1 | Khởi tạo, chấp nhận, từ chối, kết thúc, hủy cuộc gọi; tự đóng và ghi là cuộc gọi nhỡ nếu 45 giây không ai bắt máy |
+| WebRTC signaling | Trao đổi offer/answer/ICE candidate qua Socket.IO để 2 client kết nối trực tiếp (peer-to-peer); server chỉ cho phép gửi tín hiệu khi cả hai bên đều đang trong cuộc gọi |
+| STUN/TURN | Backend trả danh sách STUN và một TURN server (Metered) qua `GET /api/calls/ice-servers` để cuộc gọi giữa hai mạng khác nhau (4G, Wi-Fi) vẫn nối được |
+| Gọi nhóm | Bắt đầu, tham gia, rời, kết thúc cuộc gọi thoại nhóm; theo dõi danh sách người đang trong cuộc gọi |
 | Trạng thái cuộc gọi | Lưu trên Redis (không dùng biến in-memory), tự dọn sau 2 giờ nếu client crash không thoát cuộc gọi đúng cách |
 | Lịch sử cuộc gọi | Ghi lại vào Message với loại `call` (trạng thái missed/cancelled/ended, thời lượng) |
 
@@ -113,7 +113,7 @@ Trước khi bắt tay vào code, Gemini được dùng để tìm hiểu công 
 | Xác thực | Passport (`local`, `jwt` strategy) + `@nestjs/jwt` + bcrypt |
 | Rate limit | `@nestjs/throttler` |
 | Upload | Multer + Cloudinary |
-| Validate | `class-validator` + `class-transformer` (ValidationPipe global) |
+| Validate | `class-validator` + `class-transformer` (ValidationPipe global, báo lỗi tiếng Việt) |
 | Link preview | `axios` + `cheerio` (crawl title/description/ảnh từ URL) |
 | Nén phản hồi | `compression` (gzip middleware) |
 
@@ -152,7 +152,7 @@ Client (React/Vite)
                                      └── Redis — lưu trạng thái cuộc gọi (thay in-memory Map)
 ```
 
-Rate limit toàn cục 15 request/30 giây (ThrottlerGuard gắn ở `APP_GUARD`), route auth có limit riêng chặt hơn.
+Rate limit toàn cục 300 request/phút cho mỗi IP (ThrottlerGuard gắn ở `APP_GUARD`), route auth có limit riêng chặt hơn.
 
 ---
 
@@ -226,7 +226,7 @@ Rate limit toàn cục 15 request/30 giây (ThrottlerGuard gắn ở `APP_GUARD`
   pinnedAt: Date,
   forwardedFrom: ObjectId,      // ref Message gốc
   callInfo: {
-    callType: "voice" | "video",
+    callType: "voice",            // "video" chỉ còn ở tin nhắn cũ
     status: "missed" | "cancelled" | "ended" | "started",
     duration: Number,           // giây
     startedAt: Date,
@@ -281,18 +281,6 @@ Rate limit toàn cục 15 request/30 giây (ThrottlerGuard gắn ở `APP_GUARD`
 // Index: {blockerId, blockedId} unique, {blockerId}
 ```
 
-### `announcements`
-
-```ts
-{
-  conversationId: ObjectId,
-  content: String,
-  pinnedBy: ObjectId,
-  status: "active" | "inactive",
-}
-// Index: {conversationId, createdAt}, {pinnedBy, createdAt}, {conversationId, status}
-```
-
 ### `linkpreviews`
 
 ```ts
@@ -336,15 +324,21 @@ Project-chat-realtime-backend/
 │
 ├── backend/
 │   ├── src/
-│   │   ├── main.ts                   # Bootstrap NestJS, CORS, global prefix /api, ValidationPipe
+│   │   ├── main.ts                   # Bootstrap NestJS, CORS, global prefix /api, pipe + filter tiếng Việt
 │   │   ├── app.module.ts             # Import tất cả module, đăng ký ThrottlerGuard toàn cục
 │   │   │
 │   │   ├── config/
-│   │   │   └── db.config.ts          # Cấu hình kết nối MongoDB
+│   │   │   ├── db.config.ts          # Cấu hình kết nối MongoDB
+│   │   │   └── cors.config.ts        # Danh sách domain frontend được phép gọi API/socket
 │   │   │
-│   │   ├── common/decorators/
-│   │   │   ├── user.decorator.ts     # @User() — lấy req.user (UserDocument đầy đủ)
-│   │   │   └── jwt.decorator.ts      # @JwtDecode() — lấy payload JWT đã decode (JwtType)
+│   │   ├── socket-io.adapter.ts      # Áp dụng CORS cho cả tầng Socket.IO
+│   │   │
+│   │   ├── common/
+│   │   │   ├── pipes/validation.pipe.ts           # Validate dữ liệu, báo lỗi tiếng Việt
+│   │   │   ├── filters/http-exception.filter.ts   # Dịch lỗi mặc định của NestJS sang tiếng Việt
+│   │   │   └── decorators/
+│   │   │       ├── user.decorator.ts     # @User() — lấy req.user (UserDocument đầy đủ)
+│   │   │       └── jwt.decorator.ts      # @JwtDecode() — lấy payload JWT đã decode (JwtType)
 │   │   │
 │   │   ├── gateway/
 │   │   │   ├── chat.gateway.ts       # Xử lý toàn bộ socket event (connect, message, call...)
@@ -376,14 +370,14 @@ Project-chat-realtime-backend/
 │   │   │   │             updatePrivacy, updateProfile, updateStatus (6 DTO)
 │   │   │   │
 │   │   │   ├── conversation/
-│   │   │   │   ├── conversation.controller.ts   # 23 endpoint (xem API Reference)
+│   │   │   │   ├── conversation.controller.ts   # 21 endpoint (xem API Reference)
 │   │   │   │   ├── conversation.service.ts
 │   │   │   │   ├── conversation.module.ts
 │   │   │   │   ├── schema/conversation.schema.ts
 │   │   │   │   ├── guard/  conversationParticipant.guard.ts, messageConversation.guard.ts
-│   │   │   │   └── dto/  addMember, announcement, changeRole, conversationId,
-│   │   │   │             createGroup, createPrivate, handleRequest, isArchived,
-│   │   │   │             muteDuration, removeMember (9 DTO)
+│   │   │   │   └── dto/  addMember, changeRole, conversationId, createGroup,
+│   │   │   │             createPrivate, handleRequest, isArchived,
+│   │   │   │             muteDuration, removeMember (8 DTO)
 │   │   │   │
 │   │   │   ├── message/
 │   │   │   │   ├── message.controller.ts        # 15 endpoint (xem API Reference)
@@ -406,11 +400,6 @@ Project-chat-realtime-backend/
 │   │   │   │   ├── attachment.service.ts       # groupAttachmentsById — gom theo messageId
 │   │   │   │   ├── attachment.module.ts
 │   │   │   │   └── schema/attachment.schema.ts
-│   │   │   │
-│   │   │   ├── announcements/
-│   │   │   │   ├── announcement.service.ts
-│   │   │   │   ├── announcement.module.ts
-│   │   │   │   └── schema/announcement.schema.ts
 │   │   │   │
 │   │   │   ├── link-preview/
 │   │   │   │   ├── link-preview.service.ts     # axios + cheerio crawl meta tag
@@ -649,81 +638,79 @@ Client emit "typing_start" / "typing_stop" { conversationId }
 
 ---
 
-### 5. Cuộc gọi thoại/video qua WebRTC signaling
+### 5. Cuộc gọi thoại qua WebRTC signaling
 
 ```
 Server chỉ làm nhiệm vụ "signaling" (chuyển tiếp thông tin kết nối),
-không xử lý luồng audio/video — audio/video đi trực tiếp giữa 2 client
-qua kết nối peer-to-peer (WebRTC) sau khi đã bắt tay xong.
+không xử lý luồng âm thanh — âm thanh đi trực tiếp giữa 2 client qua
+kết nối peer-to-peer (WebRTC) sau khi đã bắt tay xong. Chỉ hỗ trợ gọi thoại.
 
 GET /api/calls/ice-servers  (JwtAuthGuard)
-  Trả về danh sách máy chủ STUN/TURN cho client dùng khi tạo
-  RTCPeerConnection. STUN không cần cấu hình gì thêm (có sẵn giá trị mặc
-  định), TURN cần khai báo qua biến môi trường TURN_URLS / TURN_USERNAME /
-  TURN_CREDENTIAL — xem mục "Environment Variables" và phần "Giới hạn đã
-  biết" bên dưới về lý do TURN quan trọng cho cuộc gọi giữa 2 mạng khác nhau.
+  Trả về danh sách STUN và 1 TURN server (Metered) cho client dùng khi tạo
+  RTCPeerConnection. TURN cấu hình bằng TURN_URLS / TURN_USERNAME /
+  TURN_CREDENTIAL, thiếu 1 trong 3 thì không trả TURN.
 
 [Gọi 1-1]
 
-Client A: emit "call_initiate" { calleeId, callType }
-  ├─→ Kiểm tra callee có đang bận (redisCallService.isUserInCall)
-  │     → bận: emit "call_busy" về A
+Client A: emit "call_initiate" { calleId, conversationId }
+  ├─→ Kiểm tra bị chặn hoặc callee đang bận (redisCallService.isUserInCall)
+  │     → emit "call_busy" về A
   ├─→ redisCallService.createCall(...) — lưu vào Redis, TTL 2 giờ
-  ├─→ emit "call_initiated" tới room user:{calleeId}
-  └─→ Đặt hẹn giờ đổ chuông 45 giây (RING_TIMEOUT_MS) — nếu callee không
-        bắt máy/từ chối/huỷ trong thời gian này, cuộc gọi tự đóng ở cả 2
-        phía và được ghi lại là "nhỡ", thay vì treo màn hình gọi vô thời hạn
+  ├─→ emit "call_initiated" tới room user:{calleeId}, "call_started" về A
+  └─→ Hẹn giờ đổ chuông 45 giây — không ai bắt máy thì cuộc gọi tự đóng
+        ở cả 2 phía và được ghi là "nhỡ"
 
-Client B: emit "call_accept" { callId }
-  ├─→ Huỷ hẹn giờ đổ chuông ở trên
-  ├─→ redisCallService.setStartedAt(callId)
-  ├─→ addParticipant(callId, B)
+Client B: chuẩn bị micro + ICE server + peer connection xong mới emit
+          "call_accept" { callId }
+  ├─→ Huỷ hẹn giờ đổ chuông
+  ├─→ redisCallService.setStartedAt(callId), addParticipant(callId, B)
   └─→ emit "call_accepted" về A
 
 [Trao đổi WebRTC signaling — chuyển tiếp qua Socket.IO]
 
-call_offer → forward tới room user:{calleeId}
-call_answer → forward tới room user:{callerId}
-call_ice_candidate → forward tới người còn lại trong cuộc gọi
+A tạo offer → call_offer → B trả call_answer → hai bên trao đổi call_ice_candidate.
+Server chỉ chuyển tiếp khi cả người gửi và người nhận đều nằm trong
+call:{callId}:members. Candidate đến sớm hơn peer connection được client
+giữ lại rồi thêm vào sau, nên không bị mất.
+
+[Mạng chập chờn]
+
+Client A (bên gọi) thấy kết nối "disconnected" quá 4 giây hoặc "failed" thì
+gửi offer mới với iceRestart (tối đa 2 lần), quá số lần đó mới kết thúc cuộc gọi.
 
 [Kết thúc]
 
 call_end / call_cancel / call_reject
-  ├─→ Huỷ hẹn giờ đổ chuông nếu còn (trường hợp kết thúc trước khi hết giờ)
+  ├─→ Huỷ hẹn giờ đổ chuông nếu còn
   ├─→ deleteCall(callId, participantIds) trên Redis
-  ├─→ Ghi lại Message type "call" với callInfo (status, duration)
+  ├─→ Ghi Message type "call" với callInfo (status, duration)
   └─→ emit "call_ended" về phía còn lại
 
 [Ngắt kết nối đột ngột — ví dụ tắt trình duyệt]
 
-handleDisconnect trên gateway:
-  ├─→ redisCallService.getUserCallId(userId) — tra xem user có đang trong call nào
-  └─→ Nếu có: tự dọn participant/call giống như khi emit call_end
-        (nếu không cleanup, TTL 2 giờ trên Redis vẫn tự xóa sau cùng)
+handleDisconnect trên gateway tra redisCallService.getUserCallId(userId),
+nếu user đang trong cuộc gọi thì dọn giống như khi emit call_end
+(nếu không dọn, TTL 2 giờ trên Redis vẫn tự xóa sau cùng).
 
-[Gọi nhóm — chỉ hỗ trợ THOẠI, không có video]
+[Gọi nhóm]
 
 group_call_start / group_call_join / group_call_leave / group_call_end
-  ├─→ callType gửi lên bị ép về "voice" bất kể client gửi gì (xem phần
-  │     "Giới hạn đã biết" bên dưới về lý do bỏ video nhóm)
-  ├─→ redisCallService lưu theo callId + set các participant trong
-  │     call:{callId}:members
-  ├─→ setActiveGroupCall(conversationId, callId) — tránh tạo 2 cuộc gọi
-  │     nhóm cùng lúc trong 1 conversation khi có người bấm gọi trùng lúc
+  ├─→ Chỉ thành viên của nhóm mới được bắt đầu hoặc tham gia
+  ├─→ redisCallService lưu theo callId + set participant call:{callId}:members
+  ├─→ setActiveGroupCall(conversationId, callId) — nhóm đã có cuộc gọi thì
+  │     người bấm gọi được đưa thẳng vào cuộc gọi đó (group_call_redirect)
+  ├─→ Người mới vào nhận danh sách người đang có mặt rồi gửi offer cho từng
+  │     người; người đang có mặt chỉ chờ offer (tránh hai bên cùng gửi offer)
   └─→ Emit group_call_started / joined / left / ended cho cả room conversation
 
 [Giới hạn đã biết]
 
-- Chỉ có STUN là chưa đủ để 2 máy ở 2 mạng khác nhau (ví dụ 2 nhà mạng 4G
-  khác nhau, hoặc mạng có NAT/firewall chặt) tự tìm thấy nhau. Cần thêm một
-  máy chủ TURN (miễn phí có thể dùng Cloudflare Calls, Metered.ca, hoặc tự
-  dựng coturn) và khai báo qua TURN_URLS/TURN_USERNAME/TURN_CREDENTIAL thì
-  các trường hợp này mới gọi được ổn định — phần này KHÔNG thể giải quyết
-  chỉ bằng code, cần một dịch vụ TURN thật.
-- Gọi nhóm dùng kiến trúc "mesh" (n người thì mỗi người mở n-1 kết nối
-  ngang hàng) — phù hợp cho nhóm nhỏ (khoảng dưới 6-8 người cùng lúc trong
-  1 cuộc gọi). Nhóm rất đông gọi cùng lúc sẽ cần một máy chủ media (SFU)
-  chuyên dụng, nằm ngoài phạm vi sửa đổi lần này.
+- Hai máy ở hai mạng khác nhau (4G của hai nhà mạng, mạng có NAT chặt) cần
+  TURN mới nối được, nên TURN_* phải được khai báo thật. Kiểm tra TURN bằng
+  cách chạy localStorage.setItem('ice_transport_policy', 'relay') trong
+  console trình duyệt rồi gọi thử: chỉ đi qua TURN, gọi được là TURN ổn.
+- Gọi nhóm dùng kiến trúc "mesh" (n người thì mỗi người mở n-1 kết nối),
+  phù hợp nhóm nhỏ (khoảng dưới 6-8 người). Nhóm đông hơn cần máy chủ media (SFU).
 ```
 
 ---
@@ -870,8 +857,6 @@ POST /api/messages/:id/voice   (voice message, kèm duration)
 | DELETE | `/api/conversations/:id/disband` | Giải tán nhóm |
 | GET | `/api/conversations/:id/requests` | Danh sách yêu cầu tham gia |
 | PATCH | `/api/conversations/:id/request/handle` | Duyệt/từ chối yêu cầu |
-| POST | `/api/conversations/:id/announcement` | Tạo thông báo ghim |
-| GET | `/api/conversations/:id/announcements` | Danh sách thông báo |
 | GET | `/api/conversations/:id/pins` | Tin nhắn đã ghim |
 | POST | `/api/conversations/:id/archive` | Lưu trữ |
 | DELETE | `/api/conversations/:id/archive` | Bỏ lưu trữ |
@@ -930,8 +915,7 @@ Nhóm:
   conversation_updated, group_created, group_member_added, group_added,
   group_member_removed, group_removed, group_member_left, group_left_self,
   group_role_changed, group_dissolved, group_join_requested,
-  group_request_handled, group_request_added, group_request_rejected,
-  announcement_created
+  group_request_handled, group_request_added, group_request_rejected
 
 Kết bạn:
   friend_request_received, friend_request_accepted, friend_request_rejected
@@ -978,25 +962,15 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_PASSWORD=
 
-# STUN/TURN cho cuộc gọi WebRTC — trả về qua GET /api/calls/ice-servers.
-# STUN không bắt buộc khai báo (có giá trị mặc định của Google), nhưng TURN
-# thì cần một dịch vụ thật mới hoạt động được. Không có TURN, cuộc gọi giữa
-# 2 người ở 2 mạng khác nhau (ví dụ 2 nhà mạng 4G khác nhau) có thể không
-# kết nối được — xem thêm ở mục "Giới hạn đã biết" trong phần Application
-# Workflows > Cuộc gọi thoại/video.
-STUN_URLS=stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302
-TURN_URLS=
-TURN_USERNAME=
-TURN_CREDENTIAL=
-
-# (Không bắt buộc) nhà cung cấp TURN thứ 2, dùng làm dự phòng nếu nhà cung
-# cấp chính hết quota hoặc gặp sự cố — để trống nếu chỉ dùng 1 nhà cung cấp.
-TURN_URLS_2=
-TURN_USERNAME_2=
-TURN_CREDENTIAL_2=
+# STUN/TURN cho cuộc gọi, trả về qua GET /api/calls/ice-servers
+# (chỉ dùng 1 TURN server — Metered, lấy username/credential trong dashboard)
+STUN_URLS=stun:stun.relay.metered.ca:80,stun:stun.l.google.com:19302
+TURN_URLS=turn:global.relay.metered.ca:80,turn:global.relay.metered.ca:80?transport=tcp,turn:global.relay.metered.ca:443,turns:global.relay.metered.ca:443?transport=tcp
+TURN_USERNAME=your_metered_username
+TURN_CREDENTIAL=your_metered_credential
 ```
 
-File `.env` đã có trong `.gitignore`, không commit lên repository.
+File `.env` đã có trong `.gitignore`, không commit lên repository. Có sẵn file mẫu `.env.example`.
 
 ---
 
@@ -1004,7 +978,7 @@ File `.env` đã có trong `.gitignore`, không commit lên repository.
 
 ### Yêu cầu
 
-- Node.js >= 18.x
+- Node.js >= 20.x
 - MongoDB (Atlas hoặc local)
 - Redis (local hoặc dịch vụ cloud như Upstash/Redis Cloud)
 - Cloudinary account
@@ -1035,94 +1009,18 @@ Cần Redis server đang chạy trước khi start Backend — `RedisModule` k�
 
 ---
 
-## Cập nhật gần đây (tối ưu để chạy ổn định với nhiều người dùng hơn)
+## Lưu ý khi triển khai
 
-Đợt cập nhật này tập trung vào việc ứng dụng chạy ổn định hơn ở môi trường
-thật (Render + Vercel, đều dùng gói miễn phí), sửa các lỗi phát sinh khi
-dùng ở mạng thật thay vì local, và dọn bớt code/tài nguyên không dùng đến.
-Chi tiết từng thay đổi theo file/dòng nằm trong `BAO_CAO_CAP_NHAT.md` ở
-thư mục gốc của repo.
-
-**Backend**
-
-- Không còn tạo chuỗi request đến database ở mỗi request có kèm access
-  token — `JwtStrategy` nhớ tạm trong bộ nhớ 60 giây rằng một user còn tồn
-  tại, chỉ truy vấn lại khi hết hạn bản ghi nhớ.
-- Refresh token chuyển sang băm bằng SHA-256 và so sánh bằng thuật toán
-  không lộ thời gian xử lý (`timingSafeEqual`) thay vì `bcrypt.compare` —
-  refresh token là chuỗi ngẫu nhiên (không phải mật khẩu người dùng tự đặt)
-  nên không cần thuật toán chậm có "salt" như bcrypt; giá trị bcrypt cũ vẫn
-  được chấp nhận một lần rồi tự chuyển sang SHA-256.
-- Giới hạn số request (rate limit) cho đăng ký/đăng nhập/làm mới token được
-  nới ra mức thực tế hơn (xem bảng ở mục Environment Variables và API Routes
-  Reference) — số cũ quá thấp, dễ khóa nhầm người dùng thật khi nhiều người
-  dùng chung 1 mạng Wi-Fi/4G (cùng 1 địa chỉ IP công khai).
-- Thêm endpoint `GET /api/calls/ice-servers` trả về danh sách STUN/TURN
-  cho client, thay vì client tự hardcode sẵn một danh sách STUN cố định.
-  Hỗ trợ khai báo thêm một nhà cung cấp TURN thứ 2 làm dự phòng (biến môi
-  trường `TURN_URLS_2` / `TURN_USERNAME_2` / `TURN_CREDENTIAL_2`) — không
-  bắt buộc, để trống thì chỉ dùng 1 nhà cung cấp như trước.
-- Cuộc gọi 1-1 không bắt máy sau 45 giây tự đóng ở cả 2 phía và được ghi
-  nhận là "nhỡ", thay vì treo màn hình gọi không giới hạn thời gian.
-- Gọi nhóm chỉ còn hỗ trợ thoại — server ép `callType` về `"voice"` bất kể
-  client gửi gì lên, để tránh mô hình gọi video nhiều người cùng lúc
-  (mesh WebRTC) làm quá tải server free-tier.
-- Bật nén phản hồi (gzip qua middleware `compression`), cấu hình
-  `trust proxy` đúng cho môi trường có reverse proxy (Render), và danh sách
-  domain frontend được phép gọi API (`CORS`) đọc từ danh sách thay vì một
-  giá trị chuỗi đơn.
-- Endpoint `GET /api/health` phục vụ việc ping định kỳ giữ server free-tier
-  trên Render không bị ngủ đông.
-- Một số hàm chỉ cần biết "có tồn tại hay không" đổi từ `findOne` sang
-  `exists`, và endpoint danh sách người dùng không còn trả về nguyên văn
-  document (từng lộ mật khẩu đã băm và refresh token trong response).
-- Thêm `socket-io.adapter.ts`, gắn vào `main.ts` qua `app.useWebSocketAdapter(...)`,
-  để danh sách domain được phép (CORS) áp dụng nhất quán cho cả tầng
-  Socket.IO chứ không chỉ REST API.
-
-**Frontend**
-
-- Sửa lỗi header cuộc trò chuyện bị che khi cuộn trên điện thoại — nguyên
-  nhân là dùng đơn vị chiều cao `100vh`, vốn không tính đến việc thanh địa
-  chỉ trình duyệt di động tự ẩn/hiện; đổi sang `100dvh`.
-- Kết nối Socket.IO cho phép bắt đầu bằng polling rồi nâng cấp lên
-  websocket (mặc định của Engine.IO) thay vì ép chỉ dùng websocket — tránh
-  cảnh báo kết nối thất bại lúc backend Render đang khởi động lại sau khi
-  ngủ đông (cold start), đồng thời cấu hình tự kết nối lại khi mất mạng.
-- Cuộc gọi 1-1 và gọi nhóm lấy danh sách STUN/TURN từ backend thay vì
-  hardcode sẵn, và tự huỷ nếu không kết nối được sau một khoảng thời gian
-  thay vì hiển thị "Đang kết nối..." vô thời hạn khi 2 máy ở 2 mạng khác
-  nhau không tự bắt được nhau qua STUN. Việc tải danh sách ICE server được
-  `await` ngay trước khi tạo peer connection (trước đây chỉ tải ngầm lúc mở
-  modal, có thể chưa tải xong khi 2 bên bắt máy quá nhanh, khiến cuộc gọi
-  vô tình chạy với STUN mặc định thay vì danh sách đầy đủ có TURN). Khi
-  không lấy được micro/camera, phía đó chủ động báo cho bên kia và đóng
-  cuộc gọi ngay, thay vì để bên kia phải tự chờ hết giờ connect-timeout.
-  Có thêm cờ debug `localStorage.setItem('ice_transport_policy', 'relay')`
-  để ép cuộc gọi test chỉ đi qua TURN, phục vụ việc xác định lỗi mạng.
-- Giao diện cuộc gọi video: avatar tròn không còn hiển thị đè lên video khi
-  cuộc gọi đã kết nối (trước đây che mất một phần khuôn mặt và góc video
-  nhỏ của bản thân).
-- Gọi nhóm chỉ còn nút gọi thoại, bỏ nút gọi video nhóm và toàn bộ code xử
-  lý camera trong màn hình gọi nhóm.
-- Trang đăng nhập (`AuthPage`) và trang chat (`ChatPage` cùng các trang con)
-  được tải theo route thay vì gộp chung vào 1 file JavaScript duy nhất;
-  màn hình gọi (`CallModal`, `GroupCallModal`) cũng tải riêng khi có cuộc
-  gọi. Dung lượng JavaScript tải lần đầu giảm từ khoảng 638KB xuống còn
-  khoảng 283KB (đo bằng `npm run build`, chưa nén gzip).
-- `authService.ts` tự thêm `/api` vào cuối `VITE_API_URL` nếu thiếu — toàn bộ
-  route backend đều có tiền tố `/api`, cấu hình thiếu đoạn này trên Vercel
-  từng khiến mọi request REST bị lỗi 404. Đây là lưới an toàn, không thay
-  thế việc phải cấu hình đúng giá trị này trên Vercel và deploy lại (Vite
-  gắn cứng biến môi trường vào lúc build).
-- Xoá các file không còn được import ở đâu trong code: component
-  `ProfileView.tsx` (410 dòng, đã có chức năng tương đương trong
-  `SettingsModal.tsx`), cùng khoảng 900KB ảnh nền và icon mẫu mặc định của
-  Vite/React trong thư mục `public/` — các file trong `public/` được deploy
-  nguyên trạng lên Vercel dù không được code nào tham chiếu tới.
+- **Backend (Render) + Frontend (Vercel):** `VITE_API_URL` trên Vercel phải kết thúc bằng `/api`
+  (ví dụ `https://<ten-backend>.onrender.com/api`), đổi xong cần redeploy vì Vite gắn
+  biến môi trường vào lúc build. `URL_FE_CONNECT` trên Render phải có domain Vercel của frontend.
+- **Render gói miễn phí** tự ngủ sau một thời gian không dùng. `GET /api/health` không truy vấn
+  database, có thể dùng cho dịch vụ ping định kỳ để giữ server thức.
+- **Cuộc gọi giữa 4G và Wi-Fi** cần TURN. Nếu cuộc gọi tự nhiên không nối được dù cấu hình đúng,
+  kiểm tra hạn mức băng thông tháng của TURN trong dashboard Metered.
+- **Secret** (`MONGODB_URI`, `JWT_SECRET`, `CLOUD_API_SECRET`, `TURN_CREDENTIAL`...) chỉ đặt trong
+  biến môi trường của nền tảng hosting hoặc file `.env` cục bộ, không đưa vào repository.
 
 ---
-
-
 
 Dự án cá nhân, thực hành xây dựng backend realtime với NestJS, MongoDB, Redis và Socket.IO, kèm phần frontend React để hoàn thiện một ứng dụng chat sử dụng được đầu cuối.

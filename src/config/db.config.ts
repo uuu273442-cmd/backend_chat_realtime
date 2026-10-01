@@ -1,8 +1,6 @@
 import {MongooseModuleOptions} from "@nestjs/mongoose";
 
-// Cấu hình kết nối MongoDB.
-// - maxPoolSize: giới hạn số kết nối để không vượt giới hạn của gói Atlas miễn phí.
-// - serverSelectionTimeoutMS: báo lỗi sớm nếu không tìm thấy server thay vì treo lâu.
+// cấu hình kết nối mongodb: giới hạn số kết nối và báo lỗi sớm khi không tìm thấy server
 export const mongooseConfig = (): MongooseModuleOptions => ({
     uri: process.env.MONGODB_URI,
     maxPoolSize: 10,

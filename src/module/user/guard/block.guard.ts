@@ -17,7 +17,7 @@ export class BlockGuard implements CanActivate {
         const room = req.params.id;
         const userId = req.user.userId;
 
-        // Ưu tiên dùng conversation đã được ConversationParticipantGuard tải sẵn
+        // dùng lại hội thoại đã được guard trước tải sẵn
         const findConv: ConversationDocument = req.conversation
             ?? await this.conversationService.findConversation(room);
         if (findConv.type === "group") return true;
@@ -27,7 +27,7 @@ export class BlockGuard implements CanActivate {
 
         if (!otherId) return true;
         const isBlocked = await this.userService.isBlocked(userId, otherId);
-        if (isBlocked) throw new ForbiddenException("User is blocked");
+        if (isBlocked) throw new ForbiddenException("Người dùng đã bị chặn");
 
         return true;
     }

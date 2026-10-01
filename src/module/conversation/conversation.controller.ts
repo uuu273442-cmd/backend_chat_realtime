@@ -12,7 +12,6 @@ import {AddMemberDto} from "./dto/addMember.dto";
 import {RemoveMemberDto} from "./dto/removeMember.dto";
 import {ChangeRoleDto} from "./dto/changeRole.dto";
 import {HandleRequestDto} from "./dto/handleRequest.dto";
-import {AnnouncementDto} from "./dto/announcement.dto";
 import {IsArchived} from "./dto/isArchived.dto";
 import {MuteDurationDto} from "./dto/muteDuration.dto";
 import {ConversationParticipantGuard} from "./guard/conversationParticipant.guard";
@@ -33,8 +32,7 @@ export class ConversationController {
         return this.conversationService.create(user.userId, dto.userId);
     }
 
-    // FIX [SECURITY CRITICAL]: Thêm ConversationParticipantGuard vào tất cả GET info routes
-    // Trước đây bất kỳ authenticated user nào cũng có thể GET info của conversation bất kỳ
+    // chỉ thành viên mới xem được
     @UseGuards(ConversationParticipantGuard)
     @Get(":id/info")
     public async getInfoPrivate(
@@ -43,7 +41,7 @@ export class ConversationController {
         return this.conversationService.infoConversation(room);
     }
 
-    // FIX [SECURITY CRITICAL]: Thêm ConversationParticipantGuard
+    // chỉ thành viên mới xem được
     @UseGuards(ConversationParticipantGuard)
     @Get(":id/info/media")
     public async getInfoMedia(
@@ -52,7 +50,7 @@ export class ConversationController {
         return this.conversationService.infoMediaConversation(room);
     }
 
-    // FIX [SECURITY CRITICAL]: Thêm ConversationParticipantGuard
+    // chỉ thành viên mới xem được
     @UseGuards(ConversationParticipantGuard)
     @Get(":id/info/file")
     public async getInfoFile(
@@ -61,7 +59,7 @@ export class ConversationController {
         return this.conversationService.infoFileConversation(room);
     }
 
-    // FIX [SECURITY CRITICAL]: Thêm ConversationParticipantGuard
+    // chỉ thành viên mới xem được
     @UseGuards(ConversationParticipantGuard)
     @Get(":id/info/link-preview")
     public async getInfoLinkPreview(
@@ -181,26 +179,6 @@ export class ConversationController {
             user.userId,
             user.name
         );
-    }
-
-    @Post(":id/announcement")
-    public async announcement(
-        @Param("id") room: ConversationIdDto["id"],
-        @JwtDecode() user: JwtType,
-        @Body() dto: AnnouncementDto
-    ) {
-        return this.conversationService.createAnnouncement(
-            room,
-            user.userId,
-            dto.content
-        )
-    }
-
-    @Get(":id/announcements")
-    public async announcements(
-        @Param("id") room: ConversationIdDto["id"],
-    ) {
-        return this.conversationService.announcements(room);
     }
 
     @Get(":id/pins")

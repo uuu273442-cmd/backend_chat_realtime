@@ -88,6 +88,6 @@ UserSchema.set("toJSON", {
     },
 });
 
-// Index email đã được tạo bởi unique: true ở trên nên không khai báo lại
+// index email đã có từ unique: true ở trên
 UserSchema.index({phoneNumber: 1}, {unique: true});
 UserSchema.index({name: "text"});

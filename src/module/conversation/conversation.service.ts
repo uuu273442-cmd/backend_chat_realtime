@@ -18,7 +18,6 @@ import {AttachmentDocument} from "../attachment/schema/attachment.schema";
 import {LinkPreviewService} from "../link-preview/link-preview.service";
 import {LinkPreviewDocument} from "../link-preview/schema/link-preview.schema";
 import {RequestJoinRoomService} from "../requestJoinRoom/requestJoinRoom.service";
-import {AnnouncementService} from "../announcements/announcement.service";
 import {RedisCacheService} from "../../shared/redis/redisCache.service";
 
 import {convertStringToObjectId} from "../../shared/helpers/convertObjectId.helpers";
@@ -42,7 +41,6 @@ export class ConversationService {
         private readonly messageService: MessageService,
         private readonly attachmentService: AttachmentService,
         private readonly linkPreviewService: LinkPreviewService,
-        private readonly announcementService: AnnouncementService,
         private readonly requestJoinRoomService: RequestJoinRoomService,
         private readonly redisCacheService: RedisCacheService,
     ) {
@@ -58,10 +56,10 @@ export class ConversationService {
 
     public async create(myUserId: string, userId: string) {
         if (myUserId === userId)
-            throw new ForbiddenException("User can't create conversion my self!");
+            throw new ForbiddenException("Không thể tạo cuộc trò chuyện với chính mình");
         const uniqueIds = [myUserId, userId];
         const ok = await this.checkListUser(uniqueIds);
-        if (!ok) throw new ForbiddenException("Owner or user not found!");
+        if (!ok) throw new ForbiddenException("Không tìm thấy người tạo hoặc người dùng");
 
         const existConversation = await this.conversationModel.findOne({
             type: "private",
@@ -81,10 +79,7 @@ export class ConversationService {
         const conversation = await this.conversationModel.create({
             type: "private",
             createdBy: convertStringToObjectId(myUserId),
-            // Nếu 2 người CHƯA phải bạn bè (nhắn tin thẳng không qua kết bạn),
-            // conversation tự lưu vào mục "Lưu trữ" phía người NHẬN (userId)
-            // để không làm phiền họ, nhưng vẫn hiện bình thường cho người GỬI.
-            // Người nhận vẫn thấy được trong archived list kèm dot thông báo.
+            // chưa là bạn bè thì hội thoại tự vào mục lưu trữ của người nhận
             participants: this.groupParticipants(
                 uniqueIds,
                 myUserId,
@@ -93,7 +88,7 @@ export class ConversationService {
         });
         await conversation.populate("createdBy", "name");
 
-        // [REDIS] Invalidate cache của cả 2 user khi tạo conversation mới
+        // xoá cache của 2 người
         await this.redisCacheService.invalidateConversationsMany(uniqueIds);
 
         this.chatGateway.emitGroupCreated(uniqueIds, {
@@ -144,7 +139,7 @@ export class ConversationService {
             .populate(this.arrayPopulate())
             .lean();
         if (!findConversationPrivate) {
-            throw new NotFoundException("Not found");
+            throw new NotFoundException("Không tìm thấy dữ liệu");
         }
 
         return findConversationPrivate;
@@ -188,13 +183,13 @@ export class ConversationService {
             this.isAnyMemberExists(room, uniqueIds)
         ]);
         if (!validUsers) {
-            throw new ForbiddenException("Some users not found!");
+            throw new ForbiddenException("Một số người dùng không tồn tại");
         }
         if (!uniqueIds.length) {
-            throw new ForbiddenException("User must be less than 1");
+            throw new ForbiddenException("Cần chọn ít nhất 1 người dùng");
         }
         if (alreadyExists) {
-            throw new ForbiddenException("Some users already exist in group!");
+            throw new ForbiddenException("Một số người dùng đã ở trong nhóm");
         }
         const conversation = await this.findConversation(room);
         const actor = this.getUserParticipant(conversation, actorId);
@@ -219,7 +214,7 @@ export class ConversationService {
         conversation.participants.push(...newMembers);
         await conversation.save();
 
-        // [REDIS] Invalidate cache của tất cả members (cũ + mới)
+        // xoá cache của thành viên cũ và mới
         const allAffectedIds = [
             ...conversation.participants.map((p) => p.userId.toString()),
             ...uniqueIds,
@@ -254,10 +249,10 @@ export class ConversationService {
     ) {
         const ok = await this.checkListUser(userIds);
         if (!ok) {
-            throw new ForbiddenException("Some users not found!");
+            throw new ForbiddenException("Một số người dùng không tồn tại");
         }
         if (!userIds.length) {
-            throw new ForbiddenException("User must be less than 1!");
+            throw new ForbiddenException("Cần chọn ít nhất 1 người dùng");
         }
         const conversation = await this.findConversation(room);
         const actor = this.getUserParticipant(conversation, actorId);
@@ -266,10 +261,10 @@ export class ConversationService {
         );
 
         if (!["owner", "admin"].includes(actor.role)) {
-            throw new ForbiddenException("User role must be a owner or admin!");
+            throw new ForbiddenException("Chỉ chủ nhóm hoặc quản trị viên mới có quyền này");
         }
         if (!checkCanRemoveMem) {
-            throw new ForbiddenException("Can't remove member for this conversation!");
+            throw new ForbiddenException("Không thể xoá thành viên khỏi cuộc trò chuyện này");
         }
         const uniqueIds = new Set(userIds);
         const newParticipants = conversation.participants.filter(
@@ -278,7 +273,7 @@ export class ConversationService {
         conversation.participants = newParticipants;
         await conversation.save();
 
-        // [REDIS] Invalidate cache của members bị xoá
+        // xoá cache của người bị xoá khỏi nhóm
         await this.redisCacheService.invalidateConversationsMany(userIds);
 
         const removedBy = {_id: actorId, name: userName};
@@ -310,20 +305,20 @@ export class ConversationService {
         role: "admin" | "member",
     ) {
         const ok = await this.checkListUser([userId]);
-        if (!ok) throw new ForbiddenException("User not found!");
+        if (!ok) throw new ForbiddenException("Không tìm thấy người dùng");
         const conversation = await this.findConversation(room);
 
         const actor = this.getUserParticipant(conversation, actorId);
         const obj = this.getUserParticipant(conversation, userId);
 
         if (!["owner", "admin"].includes(actor.role)) {
-            throw new ForbiddenException("User role must be a owner or admin!")
+            throw new ForbiddenException("Chỉ chủ nhóm hoặc quản trị viên mới có quyền này")
         }
         if (actorId === userId) {
-            throw new ForbiddenException("You can't change role for this you!")
+            throw new ForbiddenException("Bạn không thể đổi vai trò của chính mình")
         }
         if (actor.role === "admin" && obj.role === "owner") {
-            throw new ForbiddenException("You can't change role for this user!");
+            throw new ForbiddenException("Bạn không thể đổi vai trò của người này");
         }
         const participant = this.getUserParticipant(conversation, userId);
         participant.role = role;
@@ -383,7 +378,7 @@ export class ConversationService {
         conversation.participants = newParticipants;
         await conversation.save();
 
-        // [REDIS] Invalidate cache của user rời nhóm
+        // xoá cache của người rời nhóm
         await this.redisCacheService.invalidateConversations(userId);
 
         const leftUser = {_id: userId, name: userName};
@@ -407,13 +402,12 @@ export class ConversationService {
         const user = this.getUserParticipant(conversation, userId);
 
         if (user.role !== "owner") {
-            throw new ForbiddenException("You can't disband group!");
+            throw new ForbiddenException("Bạn không có quyền giải tán nhóm");
         }
 
-        // Lấy danh sách members TRƯỚC khi xóa để emit socket
+        // lấy danh sách thành viên trước khi xoá để gửi sự kiện
         const memberIds = conversation.participants.map((p) => p.userId.toString());
 
-        // [REDIS] Invalidate cache
         await this.redisCacheService.invalidateConversationsMany(memberIds);
 
         await Promise.all([
@@ -422,7 +416,7 @@ export class ConversationService {
             this.attachmentService.cleanDateAttachments(conversationId)
         ]);
 
-        // Emit GROUP_DISSOLVED đến tất cả members SAU KHI xóa xong
+        // báo cho thành viên sau khi xoá xong
         this.chatGateway.emitGroupDissolved(memberIds, conversationId, {
             conversationId,
             dissolvedBy: userId,
@@ -436,8 +430,8 @@ export class ConversationService {
         actorId: string
     ) {
         const conversation = await this.findConversation(room);
-        // Tất cả member đều xem được danh sách pending requests (không chỉ owner/admin)
-        this.getUserParticipant(conversation, actorId); // vẫn verify user là participant
+        // ai trong nhóm cũng xem được yêu cầu đang chờ
+        this.getUserParticipant(conversation, actorId);  // vẫn kiểm tra người dùng có trong nhóm
         return this.requestJoinRoomService.listRequestJoinRoom(conversation._id.toString());
     }
 
@@ -452,7 +446,7 @@ export class ConversationService {
         const actor = this.getUserParticipant(conversation, actorId);
 
         if (!["owner", "admin"].includes(actor.role)) {
-            throw new ForbiddenException("User role must be a owner or admin!");
+            throw new ForbiddenException("Chỉ chủ nhóm hoặc quản trị viên mới có quyền này");
         }
         const userId = await this.requestJoinRoomService.handleRequestJoinRoom(id, action);
         if (action === "accept") {
@@ -460,7 +454,7 @@ export class ConversationService {
             conversation.participants.push(...participant);
             await conversation.save();
 
-            // [REDIS] Invalidate cache của user mới được thêm vào
+            // xoá cache của người mới được thêm
             await this.redisCacheService.invalidateConversations(userId);
 
             const handledBy = {_id: actorId, name: userName};
@@ -481,7 +475,7 @@ export class ConversationService {
         }
         return {
             status: "reject",
-            message: "request have been rejected!"
+            message: "Yêu cầu đã bị từ chối"
         }
     }
 
@@ -534,9 +528,9 @@ export class ConversationService {
         const uniqueIds = Array.from(new Set([userId, ...groupIds]));
         const ok = await this.checkListUser(uniqueIds);
         if (!ok)
-            throw new ForbiddenException("Some user not found.");
+            throw new ForbiddenException("Một số người dùng không tồn tại");
         if (uniqueIds.length < 3)
-            throw new ForbiddenException("Group must be at least 3 members");
+            throw new ForbiddenException("Nhóm phải có ít nhất 3 thành viên");
         const group = await this.conversationModel.create({
             createdBy: convertStringToObjectId(userId),
             participants: this.groupParticipants(uniqueIds, userId),
@@ -545,7 +539,7 @@ export class ConversationService {
         });
         await group.populate("createdBy", "name");
 
-         // [REDIS] Invalidate cache của tất cả members mới
+         // xoá cache của các thành viên mới
         await this.redisCacheService.invalidateConversationsMany(uniqueIds);
 
         this.chatGateway.emitGroupCreated(uniqueIds, {
@@ -566,7 +560,7 @@ export class ConversationService {
         conversation.deletedUser = conversation.deletedUser || [];
         const convertSet = new Set(conversation.deletedUser.map(uid => uid.toString()));
         if (convertSet.has(user.userId.toString()))
-            throw new ForbiddenException("User already remove conversation, please recovery!");
+            throw new ForbiddenException("Bạn đã xoá cuộc trò chuyện này, vui lòng khôi phục");
 
         conversation.deletedUser.push(user.userId);
         if (conversation.participants.length === conversation.deletedUser.length) {
@@ -580,7 +574,7 @@ export class ConversationService {
         }
         await conversation.save();
 
-        // [REDIS] Invalidate cache của user vừa xoá conversation
+        // xoá cache của người vừa xoá hội thoại
         await this.redisCacheService.invalidateConversations(userId);
 
         return conversation;
@@ -597,14 +591,9 @@ export class ConversationService {
         ];
     }
 
-    /**
-     * [REDIS] getAllConversations — Cache-aside pattern.
-     * 1. Thử lấy từ Redis cache (TTL 30s)
-     * 2. Miss → query MongoDB + tính unread bằng aggregation
-     * 3. Lưu kết quả vào cache
-     */
+    // lấy danh sách hội thoại (có cache 30s)
     public async getAllConversations(myUserId: string, includeArchived = false) {
-         // 1. Cache hit
+         // 1. có cache thì trả luôn
         const cached = await this.redisCacheService.getConversations(
             myUserId,
             includeArchived,
@@ -629,13 +618,12 @@ export class ConversationService {
         });
         const conversationIds = filteredConversations.map(conv => conv._id);
 
-        // FIX [PERFORMANCE]: Thay filterMessageConversationNotSeen (N+1 / full scan) bằng
-        // aggregation pipeline — 1 query trả về {conversationId, count} thay vì load toàn bộ message IDs
+        // đếm tin chưa đọc bằng 1 truy vấn aggregation
         const unreadCounts = await this.messageService.getUnreadCountsPerConversation(
             conversationIds, myUserId
         );
 
-        // Build hashmap: conversationId → unreadCount
+        // map: conversationId -> số tin chưa đọc
         const hashMap = new Map<string, number>();
         for (const item of unreadCounts) {
             hashMap.set(item._id.toString(), item.count);
@@ -646,7 +634,7 @@ export class ConversationService {
             unreadCount: hashMap.get(conv._id.toString()) || 0,
         }));
  
-        // 3. Lưu vào cache 30 giây
+        // 3. lưu vào cache
         await this.redisCacheService.setConversations(myUserId, includeArchived, result);
         
         return result;
@@ -661,10 +649,10 @@ export class ConversationService {
         });
 
         if (!result.matchedCount) {
-            throw new NotFoundException("Conversation not found or you are not a member!");
+            throw new NotFoundException("Không tìm thấy cuộc trò chuyện hoặc bạn không phải thành viên");
         }
 
-        // [REDIS] Invalidate cache vì archived status thay đổi
+        // xoá cache vì trạng thái lưu trữ đổi
         await this.redisCacheService.invalidateConversations(userId);
 
         return {success: true, archived: archive};
@@ -688,7 +676,7 @@ export class ConversationService {
             {new: true}
         );
         if (!updatedConversation) {
-            throw new NotFoundException("Conversation not found");
+            throw new NotFoundException("Không tìm thấy cuộc trò chuyện");
         }
         return updatedConversation;
     }
@@ -698,7 +686,7 @@ export class ConversationService {
             convertStringToObjectId(room),
         );
         if (!conversation) {
-            throw new NotFoundException("Conversation not found");
+            throw new NotFoundException("Không tìm thấy cuộc trò chuyện");
         }
         return conversation;
     }
@@ -711,7 +699,7 @@ export class ConversationService {
             conv => conv.userId.toString() === userId
         );
         if (!obj)
-            throw new ForbiddenException("Participant not found user needed!");
+            throw new ForbiddenException("Không tìm thấy người tham gia");
         return obj;
     }
 
@@ -734,29 +722,6 @@ export class ConversationService {
             },
             {_id: 1, participants: 1}
         );
-    }
-
-    public async createAnnouncement(
-        conversationId: string,
-        userId: string,
-        content: string,
-    ) {
-        const validateConversation = await this.findConversation(conversationId);
-        const newAnnouncement = await this.announcementService.createAnnouncement(
-            validateConversation.id, userId, content,
-        );
-        this.chatGateway.emitAnnouncement(conversationId, {
-            conversationId,
-            announcement: newAnnouncement,
-        });
-        return newAnnouncement;
-    }
-
-    public async announcements(
-        conversationId: string,
-    ) {
-        const findConversation = await this.findConversation(conversationId);
-        return this.announcementService.announcements(findConversation.id);
     }
 
     public async pins(conversationId: string) {
@@ -792,7 +757,7 @@ export class ConversationService {
         });
 
         if (!result.matchedCount)
-            throw new NotFoundException("Conversation not found or you are not a member!");
+            throw new NotFoundException("Không tìm thấy cuộc trò chuyện hoặc bạn không phải thành viên");
         return {success: true, mutedUntil}
     }
 
@@ -808,7 +773,7 @@ export class ConversationService {
         });
 
         if (!result.matchedCount)
-            throw new NotFoundException("Conversation not found or you are not a member!");
+            throw new NotFoundException("Không tìm thấy cuộc trò chuyện hoặc bạn không phải thành viên");
         return {success: true}
     }
 }

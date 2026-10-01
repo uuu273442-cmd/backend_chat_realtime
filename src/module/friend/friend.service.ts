@@ -46,21 +46,21 @@ export class FriendService {
         message: string,
     ) {
         if (fromId === toId) {
-            throw new ForbiddenException("User not is a user");
+            throw new ForbiddenException("Không thể gửi lời mời kết bạn cho chính mình");
         }
         const targetUser = await this.userService.findById(toId);
         if (!targetUser) {
-            throw new NotFoundException("User not found");
+            throw new NotFoundException("Không tìm thấy người dùng");
         }
 
         const exits = await this.friendExits(fromId, toId);
         if (exits) {
             if (exits.status === "accepted")
-                throw new ForbiddenException("Already friend");
+                throw new ForbiddenException("Hai bạn đã là bạn bè");
             if (exits.status === "pending")
-                throw new ForbiddenException("Request already pending");
+                throw new ForbiddenException("Lời mời kết bạn đang chờ xử lý");
             if (exits.status === "rejected")
-                throw new ForbiddenException("User have rejected");
+                throw new ForbiddenException("Lời mời kết bạn trước đó đã bị từ chối");
         }
 
         const request = await this.friendRequestModel.create({
@@ -85,10 +85,10 @@ export class FriendService {
         const req = await this.findRequestId(requestId);
 
         if (!req || req.to.toString() !== userId) {
-            throw new ForbiddenException("User get request not for you!");
+            throw new ForbiddenException("Lời mời này không dành cho bạn");
         }
         if (req.status !== "pending") {
-            throw new BadRequestException("Request already handled");
+            throw new BadRequestException("Lời mời đã được xử lý");
         }
         req.status = "accepted";
         await req.save();
@@ -116,10 +116,10 @@ export class FriendService {
         const req = await this.findRequestId(requestId);
 
         if (!req || req.to.toString() !== userId) {
-            throw new ForbiddenException("User get request not for you!");
+            throw new ForbiddenException("Lời mời này không dành cho bạn");
         }
         if (req.status !== "pending") {
-            throw new BadRequestException("Request already handled");
+            throw new BadRequestException("Lời mời đã được xử lý");
         }
         req.status = "rejected";
         await req.save();
@@ -162,7 +162,7 @@ export class FriendService {
             });
 
         if (!relation) {
-            throw new NotFoundException("Not friend");
+            throw new NotFoundException("Hai bạn chưa là bạn bè");
         }
         await relation.deleteOne();
         return {success: true}
@@ -182,11 +182,7 @@ export class FriendService {
         return !!friend;
     }
 
-    /**
-     * Check quan hệ bạn bè giữa mình và 1 user cụ thể — dùng cho
-     * UserProfileModal để hiện đúng nút (Kết bạn / Đã gửi lời mời /
-     * Chấp nhận lời mời / Bạn bè)
-     */
+    // kiểm tra quan hệ bạn bè với 1 người (để hiện đúng nút kết bạn)
     public async getFriendStatus(myUserId: string, userId: string) {
         const from = convertStringToObjectId(myUserId);
         const to = convertStringToObjectId(userId);
@@ -201,14 +197,14 @@ export class FriendService {
         if (!relation) return {status: "none" as const};
         if (relation.status === "accepted") return {status: "friends" as const};
         if (relation.status === "pending") {
-            // Ai là người gửi lời mời quyết định nút hiện ra là gì
+            // người gửi lời mời quyết định nút hiện ra
             const iSent = relation.from.toString() === myUserId;
             return {
                 status: iSent ? "request_sent" as const : "request_received" as const,
                 requestId: relation._id.toString(),
             };
         }
-        // rejected trước đó — cho phép gửi lại (coi như chưa có quan hệ)
+        // đã từ chối trước đó thì cho gửi lại
         return {status: "none" as const};
     }
 

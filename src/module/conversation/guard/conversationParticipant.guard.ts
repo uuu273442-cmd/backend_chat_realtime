@@ -20,10 +20,10 @@ export class ConversationParticipantGuard implements CanActivate {
                 conversationId,
             );
         if (!isMember) {
-            throw new ForbiddenException("User does not in private conversation");
+            throw new ForbiddenException("Bạn không thuộc cuộc trò chuyện này");
         }
 
-        // Lưu lại để các guard và service phía sau dùng lại, không phải truy vấn lần nữa
+        // lưu lại cho guard và service phía sau dùng
         req.conversation = isMember;
         return true;
     }

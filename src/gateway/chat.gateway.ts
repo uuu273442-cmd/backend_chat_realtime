@@ -23,11 +23,15 @@ import {PresenceEmitService} from "./services/presenceEmit.service";
 import {CallEmitService} from "./services/callEmit.service";
 
 import {gatewayRooms} from "./gateway.rooms";
-
-// [Redis] memory ram redis
 import {RedisCallService} from "../shared/redis/redisCall.service";
-import { SOCKET_EVENTS } from "./gateway.constants";
+import {SOCKET_EVENTS} from "./gateway.constants";
 import {getAllowedOrigins} from "../config/cors.config";
+
+// chỉ hỗ trợ gọi thoại
+const CALL_TYPE = "voice" as const;
+
+// quá thời gian này mà chưa ai bắt máy thì tính là cuộc gọi nhỡ
+const RING_TIMEOUT_MS = 45_000;
 
 @WebSocketGateway({
     cors: {
@@ -42,14 +46,7 @@ export class ChatGateway
 
     private readonly logger = new Logger(ChatGateway.name);
 
-    // Cuộc gọi 1-1 chưa được bắt máy sau khoảng thời gian này sẽ tự động
-    // coi là "nhỡ" — trước đây không có giới hạn nên nếu người nhận không
-    // phản hồi, hai bên cứ treo màn hình gọi mãi không có phản hồi gì.
-    // Lưu ý: timer này sống trong bộ nhớ của 1 instance server. Nếu sau này
-    // chạy nhiều instance backend cùng lúc (scale ngang) cần chuyển việc theo
-    // dõi timeout này ra Redis (ví dụ dùng lệnh EXPIRE + pub/sub) để mọi
-    // instance đều biết cuộc gọi đã hết hạn.
-    private readonly RING_TIMEOUT_MS = 45_000;
+    // timer đổ chuông theo callId (lưu trong ram của 1 instance)
     private readonly pendingCallTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
     constructor(
@@ -62,8 +59,6 @@ export class ChatGateway
         private readonly groupEmit: GroupEmitService,
         private readonly presenceEmit: PresenceEmitService,
         private readonly callEmit: CallEmitService,
-
-        // [REDIS] Inject RedisCallService thay thế in-memory Maps
         private readonly redisCallService: RedisCallService,
         @Inject(forwardRef(() => MessageService))
         private readonly messageService: MessageService,
@@ -75,7 +70,7 @@ export class ChatGateway
         this.groupEmit.setServer(server);
         this.presenceEmit.setServer(server);
         this.callEmit.setServer(server);
-        this.logger.log("ChatGateway initialized");
+        this.logger.log("ChatGateway đã khởi tạo");
     }
 
     async handleConnection(client: Socket) {
@@ -98,7 +93,7 @@ export class ChatGateway
             await this.userService.setOnline(userId);
             this.presenceEmit.userOnline(userId);
 
-            this.logger.debug(`Client connected: ${userId}`);
+            this.logger.debug(`Người dùng kết nối: ${userId}`);
         } catch {
             client.disconnect(true);
         }
@@ -108,70 +103,60 @@ export class ChatGateway
         const userId: string = client.data.userId;
         if (!userId) return;
 
-        // Cleanup call state trên Redis nếu user đang trong cuộc gọi
+        // dọn cuộc gọi nếu đang gọi mà mất kết nối
         const callId = await this.redisCallService.getUserCallId(userId);
         if (callId) {
-            await this._handleCallCleanup(userId, callId);
+            await this.handleCallCleanup(userId, callId);
         }
 
         await this.userService.setOffline(userId);
         const lastSeen = new Date();
 
-        // Broadcast global (server.emit) không biết viewer là ai nên không thể
-        // check "friends" theo từng người xem — chỉ broadcast lastSeen thật khi
-        // privacy = "everyone". Còn lại ẩn giá trị trong broadcast (FE vẫn thấy
-        // đúng qua REST fetch nếu về sau họ là bạn bè và mở lại profile/chat).
+        // chỉ gửi lastSeen thật khi người dùng cho phép mọi người xem
         const myPrivacy = await this.userService.getPrivacy(userId);
         const canBroadcastLastSeen = myPrivacy.privacy?.lastSeenVisibility === "everyone";
         this.presenceEmit.userOffline(userId, canBroadcastLastSeen ? lastSeen : null);
 
-        this.logger.debug(`Client disconnected: ${userId}`);
+        this.logger.debug(`Người dùng ngắt kết nối: ${userId}`);
     }
 
-    /**
-     * [REDIS] Cleanup call state trên Redis.
-     * Dùng chung cho handleDisconnect và các event call_end/call_cancel.
-     */
-    private async _handleCallCleanup(userId: string, callId: string): Promise<void> {
+    // dọn trạng thái cuộc gọi trên redis khi mất kết nối đột ngột
+    private async handleCallCleanup(userId: string, callId: string): Promise<void> {
         const call = await this.redisCallService.getCall(callId);
         if (!call) return;
- 
+
         if (call.isGroup) {
             const remaining = await this.redisCallService.removeParticipant(callId, userId);
- 
+
             this.callEmit.groupCallLeft(call.conversationId!, {callId, userId});
- 
+
             if (remaining === 0) {
                 await this.redisCallService.deleteCall(callId, []);
+                await this.redisCallService.clearActiveGroupCall(call.conversationId!);
                 this.callEmit.groupCallEnded(call.conversationId!, {
                     callId,
                     conversationId: call.conversationId!,
                 });
             }
         } else {
-            this._clearRingTimeout(callId);
+            this.clearRingTimeout(callId);
 
             const participants = await this.redisCallService.getParticipants(callId);
             const otherId = call.callerId === userId ? call.calleeId : call.callerId;
- 
+
             await this.redisCallService.deleteCall(callId, participants);
- 
+
             if (otherId) {
                 this.callEmit.callEnded(otherId, {callId});
             }
         }
     }
 
-    /**
-     * Đặt hẹn giờ đổ chuông cho 1 cuộc gọi 1-1. Nếu hết RING_TIMEOUT_MS mà
-     * vẫn chưa có startedAt (nghĩa là chưa ai bắt máy), tự động coi là cuộc
-     * gọi nhỡ, dọn dẹp Redis và báo cho cả hai bên đóng màn hình gọi.
-     */
-    private _scheduleRingTimeout(callId: string): void {
+    // hẹn giờ đổ chuông, hết giờ mà chưa ai bắt máy thì huỷ và ghi cuộc gọi nhỡ
+    private scheduleRingTimeout(callId: string): void {
         const timer = setTimeout(async () => {
             this.pendingCallTimers.delete(callId);
             const call = await this.redisCallService.getCall(callId);
-            // Cuộc gọi đã được bắt máy hoặc đã kết thúc từ trước — không cần làm gì thêm
             if (!call || call.startedAt) return;
 
             const participants = await this.redisCallService.getParticipants(callId);
@@ -190,17 +175,19 @@ export class ChatGateway
                     participantIds: [call.callerId, call.calleeId ?? ""].filter(Boolean),
                 }).catch(() => {});
             }
-        }, this.RING_TIMEOUT_MS);
+        }, RING_TIMEOUT_MS);
         this.pendingCallTimers.set(callId, timer);
     }
 
-    private _clearRingTimeout(callId: string): void {
+    private clearRingTimeout(callId: string): void {
         const timer = this.pendingCallTimers.get(callId);
         if (timer) {
             clearTimeout(timer);
             this.pendingCallTimers.delete(callId);
         }
     }
+
+    // ─── hội thoại ────────────────────────────────────────────────────────────
 
     @SubscribeMessage("join_conversation")
     async joinConversation(
@@ -235,7 +222,7 @@ export class ChatGateway
         const ok = await this.conversationService.findUserParticipants(userId, data.conversationId);
         if (!ok) return;
 
-        // Không hiện "đang soạn tin" nếu 1 trong 2 đã chặn nhau (private chat)
+        // không hiện "đang soạn tin" nếu 2 người đã chặn nhau
         const conv = await this.conversationService.findConversation(data.conversationId);
         if (conv.type !== "group") {
             const otherId = conv.participants.find(
@@ -262,12 +249,12 @@ export class ChatGateway
             .emit("user_stopped_typing", {conversationId: data.conversationId, userId});
     }
 
-    // ─── 1-1 Call ─────────────────────────────────────────────────────────────
+    // ─── gọi thoại 1-1 ────────────────────────────────────────────────────────
 
     @SubscribeMessage("call_initiate")
     async onCallInitiate(
         @ConnectedSocket() client: Socket,
-        @MessageBody() data: {calleId: string, conversationId: string, callType: "voice" | "video"}
+        @MessageBody() data: {calleId: string; conversationId: string}
     ) {
         const callerId: string = client.data.userId;
 
@@ -275,54 +262,52 @@ export class ChatGateway
             callerId, data.conversationId
         );
         if (!ok) return;
-        const isCalleeExistInCall = ok.participants.find(
+        const isCalleeInConversation = ok.participants.find(
             obj => obj.userId.toString() === data.calleId
-        )
-        if (!isCalleeExistInCall) return;
-        // need to add method event error
+        );
+        if (!isCalleeInConversation) return;
 
-        // Chặn gọi điện nếu 1 trong 2 người đã block người còn lại
+        // bị chặn thì báo bận
         const blocked = await this.userService.isBlocked(callerId, data.calleId);
         if (blocked) {
             this.callEmit.callBusy(callerId, {callId: ""});
             return;
         }
 
-        // [REDIS] Kiểm tra busy từ Redis thay Map
+        // người nhận đang trong cuộc gọi khác
         const calleeInCall = await this.redisCallService.isUserInCall(data.calleId);
         if (calleeInCall) {
             this.callEmit.callBusy(callerId, {callId: ""});
             return;
         }
+
         const callId = randomUUID();
         const callerInfo = await this.userService.findById(callerId);
 
-        // [REDIS] Lưu call state vào Redis
         await this.redisCallService.createCall({
             callId,
             callerId,
             calleeId: data.calleId,
             conversationId: data.conversationId,
-            callType: data.callType,
+            callType: CALL_TYPE,
             isGroup: false,
         });
 
-        // Thêm caller vào participants ngay để pass security check khi gửi offer
+        // thêm người gọi vào danh sách để được phép gửi tín hiệu
         await this.redisCallService.addParticipant(callId, callerId);
 
         this.callEmit.callInittiated(data.calleId, {
             callId,
             callerId,
             callerInfo: {name: callerInfo!.name, avatar: callerInfo?.avatar},
-            callType: data.callType,
+            callType: CALL_TYPE,
             conversationId: data.conversationId,
         });
 
-        // Emit callId về cho caller để dùng cancel/end
-        this.callEmit.callStarted(callerId, { callId, callType: data.callType });
+        // gửi callId về cho người gọi để huỷ/kết thúc
+        this.callEmit.callStarted(callerId, {callId, callType: CALL_TYPE});
 
-        // Đặt hẹn giờ đổ chuông — tự huỷ nếu callee không phản hồi kịp
-        this._scheduleRingTimeout(callId);
+        this.scheduleRingTimeout(callId);
     }
 
     @SubscribeMessage("call_accept")
@@ -334,11 +319,10 @@ export class ChatGateway
         const call = await this.redisCallService.getCall(data.callId);
         if (!call || call.calleeId !== calleId) return;
 
-        this._clearRingTimeout(data.callId);
+        this.clearRingTimeout(data.callId);
 
-        // [REDIS] Thêm callee vào participants set trên Redis
         await this.redisCallService.addParticipant(data.callId, calleId);
-        // Lưu thời điểm bắt đầu để tính duration khi kết thúc
+        // lưu thời điểm bắt máy để tính thời lượng
         await this.redisCallService.setStartedAt(data.callId);
         this.callEmit.callAccepted(call.callerId, {callId: call.callId});
     }
@@ -352,16 +336,14 @@ export class ChatGateway
         const call = await this.redisCallService.getCall(data.callId);
         if (!call || call.calleeId !== calleeId) return;
 
-        this._clearRingTimeout(data.callId);
- 
-        // [REDIS] Xoá call khỏi Redis
+        this.clearRingTimeout(data.callId);
+
         await this.redisCallService.deleteCall(data.callId, [call.callerId]);
         this.callEmit.callRejected(call.callerId, {
             callId: call.callId,
             reasons: data?.reasons,
         });
 
-        // Lưu missed call message nếu có conversationId
         if (call.conversationId) {
             await this.messageService.createCallMessage({
                 conversationId: call.conversationId,
@@ -383,26 +365,24 @@ export class ChatGateway
         const call = await this.redisCallService.getCall(data.callId);
         if (!call) return;
 
-        this._clearRingTimeout(data.callId);
- 
+        this.clearRingTimeout(data.callId);
+
         const otherId = call.callerId === userId ? call.calleeId : call.callerId;
         const participants = await this.redisCallService.getParticipants(data.callId);
         const endedAt = new Date();
 
-        // Tính duration nếu có startedAt
+        // tính thời lượng nếu đã bắt máy
         let duration: number | undefined;
         if (call.startedAt) {
             duration = Math.floor((endedAt.getTime() - call.startedAt.getTime()) / 1000);
         }
 
-        // [REDIS] Xoá toàn bộ call state
         await this.redisCallService.deleteCall(data.callId, participants);
 
         if (otherId) {
             this.callEmit.callEnded(otherId, {callId: data.callId});
         }
 
-        // Lưu call message
         if (call.conversationId) {
             const status = call.startedAt ? "ended" : "missed";
             try {
@@ -417,10 +397,10 @@ export class ChatGateway
                     participantIds: [...participants],
                 });
             } catch (err) {
-                this.logger.error(`[call_end] createCallMessage error: ${err}`);
+                this.logger.error(`[call_end] lỗi tạo tin nhắn cuộc gọi: ${err}`);
             }
         } else {
-            this.logger.warn(`[call_end] No conversationId for callId: ${data.callId}`);
+            this.logger.warn(`[call_end] cuộc gọi ${data.callId} không có conversationId`);
         }
     }
 
@@ -433,15 +413,14 @@ export class ChatGateway
         const call = await this.redisCallService.getCall(data.callId);
         if (!call || call.callerId !== callerId) return;
 
-        this._clearRingTimeout(data.callId);
- 
+        this.clearRingTimeout(data.callId);
+
         await this.redisCallService.deleteCall(data.callId, [callerId]);
 
         if (call.calleeId) {
             this.callEmit.callCancelled(call.calleeId, {callId: data.callId});
         }
 
-        // Lưu cancelled call message
         if (call.conversationId) {
             try {
                 await this.messageService.createCallMessage({
@@ -453,60 +432,62 @@ export class ChatGateway
                     participantIds: [call.callerId, call.calleeId ?? ""].filter(Boolean),
                 });
             } catch (err) {
-                this.logger.error(`[call_cancel] createCallMessage error: ${err}`);
+                this.logger.error(`[call_cancel] lỗi tạo tin nhắn cuộc gọi: ${err}`);
             }
         } else {
-            this.logger.warn(`[call_cancel] No conversationId for callId: ${data.callId}`);
+            this.logger.warn(`[call_cancel] cuộc gọi ${data.callId} không có conversationId`);
         }
     }
 
-    // ─── WebRTC Signaling (call_offer / call_answer / call_ice_candidate) ─────
- 
+    // ─── tín hiệu webrtc (offer / answer / ice candidate) ─────────────────────
+
+    // chỉ cho gửi tín hiệu khi cả người gửi và người nhận đều đang trong cuộc gọi
+    private async canSignal(callId: string, fromUserId: string, targetUserId: string) {
+        const [fromOk, targetOk] = await Promise.all([
+            this.redisCallService.isParticipant(callId, fromUserId),
+            this.redisCallService.isParticipant(callId, targetUserId),
+        ]);
+        return fromOk && targetOk;
+    }
+
     @SubscribeMessage("call_offer")
     async onCallOffer(
         @ConnectedSocket() client: Socket,
         @MessageBody() data: {callId: string; targetUserId: string; sdp: any},
     ) {
         const fromUserId = client.data.userId;
-        const call = await this.redisCallService.getCall(data.callId);
- 
-        // [SECURITY] Verify participant từ Redis
-        if (!call || !call.participants.has(fromUserId)) return;
- 
+        if (!await this.canSignal(data.callId, fromUserId, data.targetUserId)) return;
+
         this.callEmit.callOffer(data.targetUserId, {
             callId: data.callId,
             fromUserId,
             sdp: data.sdp,
         });
     }
- 
+
     @SubscribeMessage("call_answer")
     async onCallAnswer(
         @ConnectedSocket() client: Socket,
         @MessageBody() data: {callId: string; targetUserId: string; sdp: any},
     ) {
         const fromUserId = client.data.userId;
-        const call = await this.redisCallService.getCall(data.callId);
- 
-        if (!call || !call.participants.has(fromUserId)) return;
- 
+        if (!await this.canSignal(data.callId, fromUserId, data.targetUserId)) return;
+
         this.callEmit.callAnswer(data.targetUserId, {
             callId: data.callId,
             fromUserId,
             sdp: data.sdp,
         });
     }
- 
+
     @SubscribeMessage("call_ice_candidate")
     async onCallIceCandidate(
         @ConnectedSocket() client: Socket,
         @MessageBody() data: {callId: string; targetUserId: string; candidate: any},
     ) {
         const fromUserId = client.data.userId;
-        const call = await this.redisCallService.getCall(data.callId);
- 
-        if (!call || !call.participants.has(fromUserId)) return;
- 
+        if (!await this.canSignal(data.callId, fromUserId, data.targetUserId)) return;
+
         this.callEmit.callIceCandidate(data.targetUserId, {
             callId: data.callId,
             fromUserId,
@@ -514,54 +495,43 @@ export class ChatGateway
         });
     }
 
-    // ─── Group Call ───────────────────────────────────────────────────────────
+    // ─── gọi nhóm ─────────────────────────────────────────────────────────────
 
     @SubscribeMessage("group_call_start")
     async onGroupCallStart(
         @ConnectedSocket() client: Socket,
-        @MessageBody() data: {conversationId: string; callType: "voice" | "video"},
+        @MessageBody() data: {conversationId: string},
     ) {
         const userId = client.data.userId;
         const ok = await this.conversationService.findUserParticipants(userId, data.conversationId);
         if (!ok) return;
 
-        // Gọi nhóm chỉ hỗ trợ thoại — gọi video nhóm yêu cầu mỗi thành viên gửi
-        // luồng video cho tất cả người còn lại (mesh WebRTC), rất nặng cho một
-        // server free-tier và dễ làm rớt kết nối khi nhóm đông. Nếu client cũ
-        // vẫn gửi "video", ép về "voice" thay vì từ chối cứng.
-        const callType: "voice" = "voice";
-
-        // Kiểm tra conversation đã có call đang chạy chưa — tránh tạo call trùng
-        // khi user rejoin hoặc 2 người cùng bấm gọi gần như đồng thời
+        // nhóm đã có cuộc gọi thì vào luôn, không tạo cuộc gọi mới
         const existingCallId = await this.redisCallService.getActiveGroupCall(data.conversationId);
         if (existingCallId) {
             const existingCall = await this.redisCallService.getCall(existingCallId);
             if (existingCall) {
-                // Call vẫn còn sống → redirect user này vào call đã có (auto-join)
-                // thay vì tạo call/message mới. Emit riêng cho user này biết
-                // callId thật để FE chuyển từ "outgoing/host" sang "đã tham gia".
                 this.callEmit.groupCallRedirect(userId, {
                     callId: existingCallId,
                     conversationId: data.conversationId,
                     hostId: existingCall.callerId,
                     callType: existingCall.callType,
                 });
-                await this.onGroupCallJoin(client, { callId: existingCallId });
+                await this.onGroupCallJoin(client, {callId: existingCallId});
                 return;
             }
-            // Call đã chết (TTL/lỗi) — dọn mapping cũ, tạo call mới bên dưới
+            // cuộc gọi cũ đã hết hạn, dọn rồi tạo mới
             await this.redisCallService.clearActiveGroupCall(data.conversationId);
         }
 
         const hostId = userId;
         const callId = randomUUID();
 
-        // [REDIS] Lưu group call vào Redis
         await this.redisCallService.createCall({
             callId,
             callerId: hostId,
             conversationId: data.conversationId,
-            callType,
+            callType: CALL_TYPE,
             isGroup: true,
         });
         await this.redisCallService.setActiveGroupCall(data.conversationId, callId);
@@ -570,21 +540,21 @@ export class ChatGateway
             callId,
             conversationId: data.conversationId,
             hostId,
-            callType,
+            callType: CALL_TYPE,
         });
 
-        // Lưu message "cuộc gọi nhóm bắt đầu" để members thấy và có thể join
+        // lưu tin nhắn "cuộc gọi nhóm bắt đầu" để thành viên khác vào tham gia
         try {
             await this.messageService.createCallMessage({
                 conversationId: data.conversationId,
                 callerId: hostId,
-                callType,
-                status: 'started',
+                callType: CALL_TYPE,
+                status: "started",
                 startedAt: new Date(),
                 participantIds: [hostId],
             });
         } catch (err) {
-            this.logger.error(`[group_call_start] createCallMessage error: ${err}`);
+            this.logger.error(`[group_call_start] lỗi tạo tin nhắn cuộc gọi: ${err}`);
         }
     }
 
@@ -596,32 +566,36 @@ export class ChatGateway
         const userId = client.data.userId;
         const call = await this.redisCallService.getCall(data.callId);
         if (!call || !call.isGroup) return;
- 
-        // Lấy danh sách participants TRƯỚC khi thêm user mới
+
+        // chỉ thành viên của nhóm mới được vào
+        const member = await this.conversationService.findUserParticipants(
+            userId, call.conversationId!
+        );
+        if (!member) return;
+
+        // lấy danh sách người đang có mặt trước khi thêm người mới
         const existingIds = (await this.redisCallService.getParticipants(data.callId))
             .filter(id => id !== userId);
 
-        // Lấy thông tin (name, avatar) cho từng existing participant
         const existingParticipants = await Promise.all(
             existingIds.map(async (id) => {
                 const info = await this.userService.getInfoById(id);
-                return { userId: id, name: info.name, avatar: info.avatar };
+                return {userId: id, name: info.name, avatar: info.avatar};
             })
         );
 
-        // [REDIS] Thêm participant vào Redis
         await this.redisCallService.addParticipant(data.callId, userId);
- 
+
         const userInfo = await this.userService.getInfoById(userId);
 
-        // Broadcast cho tất cả: có người mới join
+        // báo cho cả nhóm biết có người mới vào
         this.callEmit.groupCallJoined(call.conversationId!, {
             callId: data.callId,
             userId,
             userInfo: {name: userInfo.name, avatar: userInfo.avatar},
         });
 
-        // Emit riêng cho user mới: danh sách người đang có mặt (kèm tên) để tạo WebRTC offer
+        // gửi riêng cho người mới danh sách người đang có mặt để tạo offer
         this.callEmit.groupCallParticipants(userId, {
             callId: data.callId,
             existingParticipants,
@@ -636,11 +610,11 @@ export class ChatGateway
         const userId = client.data.userId;
         const call = await this.redisCallService.getCall(data.callId);
         if (!call || !call.isGroup) return;
- 
+
         const remaining = await this.redisCallService.removeParticipant(
             data.callId, userId,
         );
-        
+
         this.callEmit.groupCallLeft(call.conversationId!, {callId: data.callId, userId});
 
         if (remaining === 0) {
@@ -661,17 +635,16 @@ export class ChatGateway
         const hostId = client.data.userId;
         const call = await this.redisCallService.getCall(data.callId);
         if (!call || !call.isGroup || call.callerId !== hostId) return;
- 
+
         const participants = await this.redisCallService.getParticipants(data.callId);
         await this.redisCallService.deleteCall(data.callId, participants);
         await this.redisCallService.clearActiveGroupCall(call.conversationId!);
- 
+
         this.callEmit.groupCallEnded(call.conversationId!, {
             callId: data.callId,
             conversationId: call.conversationId!,
         });
 
-        // Lưu message kết thúc
         if (call.conversationId) {
             const endedAt = new Date();
             const duration = call.startedAt
@@ -682,19 +655,19 @@ export class ChatGateway
                     conversationId: call.conversationId,
                     callerId: hostId,
                     callType: call.callType,
-                    status: 'ended',
+                    status: "ended",
                     duration,
                     startedAt: call.startedAt,
                     endedAt,
                     participantIds: participants,
                 });
             } catch (err) {
-                this.logger.error(`[group_call_end] createCallMessage error: ${err}`);
+                this.logger.error(`[group_call_end] lỗi tạo tin nhắn cuộc gọi: ${err}`);
             }
         }
     }
 
-    // ─── Emit helpers ─────────────────────────────────────────────
+    // ─── gửi sự kiện ──────────────────────────────────────────────
 
     private async emitToParticipants(cid: string, event: string, payload: any) {
         try {
@@ -709,7 +682,7 @@ export class ChatGateway
                 });
             }
         } catch (err) {
-            this.logger.error(`Error emitting to participants: ${err}`);
+            this.logger.error(`Lỗi gửi sự kiện tới thành viên: ${err}`);
         }
     }
 
@@ -781,10 +754,6 @@ export class ChatGateway
     emitSystemRoom(cid: string, p: any) {
         this.messageEmit.messageSystemRoom(cid, p);
         this.emitToParticipants(cid, SOCKET_EVENTS.MESSAGE_SYSTEM_ROOM, p);
-    }
-
-    emitAnnouncement(cid: string, p: any) {
-        this.messageEmit.announcementCreated(cid, p);
     }
 
     emitGroupCreated(uids: string[], p: any) {

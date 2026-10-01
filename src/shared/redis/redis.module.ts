@@ -20,13 +20,13 @@ export const REDIS_CLIENT = "REDIS_CLIENT"
                     port,
                     password,
                     tls: password ? {} : undefined,
-                    // Tự reconnect khi mất kết nối
+                    // tự kết nối lại khi mất kết nối
                     retryStrategy: (times) => Math.min(times * 100, 3000),
                     lazyConnect: false,
                 });
  
-                client.on("connect", () => console.log("[Redis] Connected"));
-                client.on("error", (err) => console.error("[Redis] Error:", err));
+                client.on("connect", () => console.log("[Redis] Đã kết nối"));
+                client.on("error", (err) => console.error("[Redis] Lỗi:", err));
  
                 return client;
             },

@@ -35,7 +35,7 @@ export class LinkPreviewService {
                 image: meta("og:image") || undefined,
             };
         } catch (err) {
-            throw new ForbiddenException("Error parsing link preview");
+            throw new ForbiddenException("Không thể đọc bản xem trước của liên kết");
         }
     }
 

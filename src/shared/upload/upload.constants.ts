@@ -2,43 +2,43 @@ export const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 export const ALLOWED_FILE_TYPES = {
     media: [
-        // Images
+        // ảnh
         "image/jpeg",
         "image/png",
         "image/webp",
         "image/gif",
 
-        // Videos
+        // video
         "video/mp4",
         "video/webm",
-        "video/quicktime", // .mov (iOS hay dùng)
+        "video/quicktime",  // .mov (iphone)
     ],
 
     voice: [
-        "audio/mpeg", // mp3
+        "audio/mpeg",  // mp3
         "audio/wav",
         "audio/webm",
         "audio/ogg",
-        "audio/mp4", // m4a
+        "audio/mp4",  // m4a
     ],
 
     file: [
-        // PDF
+        // pdf
         "application/pdf",
 
-        // Word
+        // word
         "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 
-        // Excel
+        // excel
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 
-        // PowerPoint
+        // powerpoint
         "application/vnd.ms-powerpoint",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 
-        // Text
+        // văn bản
         "text/plain",
     ],
 };

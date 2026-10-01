@@ -53,27 +53,27 @@ export class GroupEmitService {
         participants: {userId: Types.ObjectId, role: "owner" | "admin" | "member"}[],
         payload: any
     ) {
-        // Emit đến TẤT CẢ participants (kể cả member) để ai cũng thấy badge thông báo
+        // gửi cho tất cả thành viên để ai cũng thấy huy hiệu thông báo
         const rooms = participants
             .map(obj => gatewayRooms.user(obj.userId.toString()));
         this.server.to(rooms).emit(SOCKET_EVENTS.GROUP_JOIN_REQUESTED, payload);
     }
 
     public requestHandled(conversationId: string, newUserId: string, payload: any) {
-        // 1. Báo cho tất cả members hiện tại biết có member mới (reload members list)
+        // 1. báo thành viên hiện tại có người mới
         this.toConversation(conversationId).emit(SOCKET_EVENTS.GROUP_MEMBER_ADDED, payload);
-        // 2. Báo cho tất cả members biết request đã được xử lý (clear pending badge)
+        // 2. báo yêu cầu đã được xử lý
         this.toConversation(conversationId).emit(SOCKET_EVENTS.GROUP_REQUEST_HANDLED, payload);
-        // 3. Báo riêng user mới: được thêm vào nhóm (FE sẽ fetch conversation mới)
+        // 3. báo riêng người mới được thêm vào nhóm
         this.toUser(newUserId).emit(SOCKET_EVENTS.GROUP_ADDED, payload);
         this.toUser(newUserId).emit(SOCKET_EVENTS.GROUP_REQUEST_ADDED, payload);
     }
 
     public dissolved(memberIds: string[], conversationId: string, payload: any) {
         const rooms = memberIds.map(uid => gatewayRooms.user(uid));
-        // Kick tất cả members ra khỏi conversation room trước
+        // đưa mọi người ra khỏi phòng trước
         this.server.in(gatewayRooms.conversation(conversationId)).socketsLeave(gatewayRooms.conversation(conversationId));
-        // Emit đến từng user để FE navigate ra ngoài
+        // báo từng người để frontend thoát khỏi nhóm
         this.server.to(rooms).emit(SOCKET_EVENTS.GROUP_DISSOLVED, payload);
     }
 }

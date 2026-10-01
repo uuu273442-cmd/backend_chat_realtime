@@ -10,7 +10,7 @@ export const createFileFilter =
             if (!allowed.includes(file.mimetype)) {
                 return cb(
                     new BadRequestException(
-                        `File type ${file.mimetype} not allowed`
+                        `Không cho phép định dạng tệp ${file.mimetype}`
                     ),
                     false,
                 );

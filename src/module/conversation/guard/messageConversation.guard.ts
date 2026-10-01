@@ -21,10 +21,10 @@ export class MessageConversationGuard implements CanActivate {
             this.messageService.findByIdCheck(messageId)
         ])
         if (!findConversation || !findMessage) {
-            throw new NotFoundException("conversation or message not found!");
+            throw new NotFoundException("conversation or Không tìm thấy tin nhắn");
         }
         if (findConversation._id.toString() !== findMessage.conversationId.toString()) {
-            throw new ConflictException("message not in conversation!");
+            throw new ConflictException("Tin nhắn không thuộc cuộc trò chuyện này");
         }
 
         return true;
